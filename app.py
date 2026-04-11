@@ -83,6 +83,8 @@ def get_stock_data(stock_code):
             start_date="20220101",
             end_date=datetime.now().strftime("%Y%m%d")
         )
+      print("ts_code:", ts_code)
+      print(df)
 
         if df is None or df.empty:
             return None
