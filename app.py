@@ -334,8 +334,7 @@ if st.button("开始自动选股"):
         st.dataframe(df_select)
     else:
         st.write("暂无结果")
-
-# ===== GPT分析（完整）=====
+      # ===== GPT分析（完整）=====
             prompt = f"""
 你是专业A股分析师，请基于以下数据输出完整分析报告：
 
@@ -397,6 +396,7 @@ MACD：{latest['MACD']:.2f}
 
             # 保存记录
             save_record(stock_code, price, short_trend, mid_trend, score, advice)
+
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
