@@ -9,10 +9,12 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V1.4")
+st.caption("版本：V2.2")
 
 st.markdown("""
 ### 📢 更新日志
+- V2.2：
+  - 缓存系统，🔥防封机制，备用“东方财富”数据源
 - V2.1：
   - 自动运行，自动记录，自动保存
 - V1.4：
