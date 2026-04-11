@@ -108,8 +108,10 @@ def get_stock_data(stock_code):
             ts_code=ts_code,
             adj='qfq',
             limit=100
-            save_cache(stock_code, df)
         )
+        # ✅ 一定要在这里（函数调用结束后）
+        if df is not None and not df.empty:
+            save_cache(stock_code, df)
         
         print("ts_code:", ts_code)
         print(df)
