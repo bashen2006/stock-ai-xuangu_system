@@ -503,13 +503,13 @@ if st.button("查看预测结果"):
         st.subheader("📊 统计分析")
 
         total = len(df_result)
+    if df_result is not None and not df_result.empty and "结果" in df_result.columns:
         correct = len(df_result[df_result["结果"] == "✅ 正确"])
+        total = len(df_result)
 
-        if total > 0:
-            accuracy = correct / total * 100
-            st.write(f"正确率：{accuracy:.2f}%")
+        st.write(f"正确率：{correct}/{total}")
     else:
-        st.write("暂无记录")
+        st.write("暂无复盘数据")
 
 # ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list):
