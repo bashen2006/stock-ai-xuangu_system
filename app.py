@@ -78,8 +78,9 @@ def get_stock_data(stock_code):
         else:
             ts_code = stock_code + ".SZ"
 
-        df = pro.daily(
+        df = ts.pro_bar(
             ts_code=ts_code,
+            adj='qfq',
             limit=100
         )
 
