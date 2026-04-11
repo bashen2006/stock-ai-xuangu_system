@@ -220,36 +220,36 @@ MACD：{latest['MACD']:.2f}
 
             results = []
 
-    for index, row in df.iterrows():
-        stock = row["股票"]
-        old_price = row["价格"]
-        advice = row["建议"]
+            for index, row in df.iterrows():
+                stock = row["股票"]
+                old_price = row["价格"]
+                advice = row["建议"]
 
-        try:
-            df_new = ak.stock_zh_a_hist(symbol=stock)
-            time.sleep(1)
-            current_price = df_new.iloc[-1]['收盘']
+                try:
+                    df_new = ak.stock_zh_a_hist(symbol=stock)
+                    time.sleep(1)
+                    current_price = df_new.iloc[-1]['收盘']
 
-            if "看多" in advice or "轻仓" in advice:
-                if current_price > old_price:
-                    result = "✅ 正确"
-                else:
-                    result = "❌ 错误"
-            else:
-                result = "⚪ 未判断"
+                    if "看多" in advice or "轻仓" in advice:
+                        if current_price > old_price:
+                            result = "✅ 正确"
+                        else:
+                            result = "❌ 错误"
+                    else:
+                        result = "⚪ 未判断"
 
-            results.append({
-                "股票": stock,
-                "当时价格": old_price,
-                "当前价格": current_price,
-                "建议": advice,
-                "结果": result
-            })
+                    results.append({
+                        "股票": stock,
+                        "当时价格": old_price,
+                        "当前价格": current_price,
+                        "建议": advice,
+                        "结果": result
+                    })
 
-        except:
-            continue
+                except:
+                    continue
 
-    return pd.DataFrame(results)
+            return pd.DataFrame(results)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
