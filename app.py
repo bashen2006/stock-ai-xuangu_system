@@ -216,7 +216,7 @@ MACD：{latest['MACD']:.2f}
             if not os.path.exists(file):
                 return None
 
-            df = pd.read_csv(file)
+                df = pd.read_csv(file)
 
             results = []
 
