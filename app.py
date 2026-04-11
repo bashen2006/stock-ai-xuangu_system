@@ -63,13 +63,13 @@ def get_stock_data(stock_code):
     import time
     import akshare as ak
 
-    for i in range(3):  # 最多重试3次
+    for i in range(5):  # 最多重试5次
         try:
             df = ak.stock_zh_a_hist(symbol=stock_code)
-            time.sleep(3)
+            time.sleep(5)
             return df
         except:
-            time.sleep(4)
+            time.sleep(6)
 
     return None
 # ===== 技术指标 =====
