@@ -58,18 +58,46 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
-# ===== 获取股票数据（带重试机制）=====
+# ===== 获取股票数据（缓存 + 主接口 + 备用接口）=====
 def get_stock_data(stock_code):
     import time
+    import os
+    import pandas as pd
     import akshare as ak
 
-    for i in range(5):  # 最多重试5次
+    cache_file = f"cache_{stock_code}.csv"
+
+    # ===== 1️⃣ 先读缓存（60秒内直接返回）=====
+    if os.path.exists(cache_file):
+        try:
+            if time.time() - os.path.getmtime(cache_file) < 60:
+                return pd.read_csv(cache_file)
+        except:
+            pass
+
+    # ===== 2️⃣ 主接口（AkShare + 重试）=====
+    for i in range(5):
         try:
             df = ak.stock_zh_a_hist(symbol=stock_code)
             time.sleep(5)
+
+            # 保存缓存
+            df.to_csv(cache_file, index=False)
+
             return df
         except:
             time.sleep(6)
+
+    # ===== 3️⃣ 备用接口（东方财富）=====
+    try:
+        df = ak.stock_zh_a_hist(symbol=stock_code, adjust="")
+        time.sleep(5)
+
+        df.to_csv(cache_file, index=False)
+
+        return df
+    except:
+        pass
 
     return None
 # ===== 技术指标 =====
