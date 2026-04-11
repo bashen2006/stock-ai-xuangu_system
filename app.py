@@ -211,14 +211,14 @@ MACD：{latest['MACD']:.2f}
             else:
                 st.write("暂无记录")
             def check_performance():
-            file = "records.csv"
+                file = "records.csv"
 
-    if not os.path.exists(file):
-        return None
+            if not os.path.exists(file):
+                return None
 
-    df = pd.read_csv(file)
+            df = pd.read_csv(file)
 
-    results = []
+            results = []
 
     for index, row in df.iterrows():
         stock = row["股票"]
