@@ -1,3 +1,5 @@
+import os
+from datetime import datetime
 import streamlit as st
 import akshare as ak
 import pandas as pd
@@ -23,6 +25,29 @@ st.markdown("""
 
 stock_code = st.text_input("请输入股票代码（如：000001）")
 
+# ===== 新增记录函数 =====
+def save_record(stock_code, price, short_trend, mid_trend, score, advice):
+    file = "records.csv"
+
+    data = {
+        "时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "股票": stock_code,
+        "价格": price,
+        "短线趋势": short_trend,
+        "波段趋势": mid_trend,
+        "评分": score,
+        "建议": advice
+    }
+
+    df_new = pd.DataFrame([data])
+
+    if os.path.exists(file):
+        df_old = pd.read_csv(file)
+        df_all = pd.concat([df_old, df_new], ignore_index=True)
+    else:
+        df_all = df_new
+
+    df_all.to_csv(file, index=False)
 # ===== 技术指标计算 =====
 def calculate_indicators(df):
     df['MA5'] = df['收盘'].rolling(5).mean()
@@ -150,6 +175,17 @@ MACD：{latest['MACD']:.2f}
             )
 
             result = response.choices[0].message.content
+          # ===== 提取建议 =====
+            advice = "未知"
+
+if "强烈看多" in result:
+    advice = "强烈看多"
+elif "轻仓" in result:
+    advice = "轻仓"
+elif "观望" in result:
+    advice = "观望"
+elif "不建议" in result:
+    advice = "不建议"
 
             st.success("✅ 分析完成")
 
@@ -161,6 +197,7 @@ MACD：{latest['MACD']:.2f}
 
             st.subheader("📊 AI分析报告")
             st.write(result)
+          save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
