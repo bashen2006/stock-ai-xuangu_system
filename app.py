@@ -314,28 +314,8 @@ if st.button("开始分析"):
             short_trend, mid_trend = get_trend(df)
             score = calculate_score(df, price, low_20, high_20)
 
-        except:
-            st.error("❌ 分析出错")
-            st.stop()
-
-
-# ===== 自动选股（V3.0）=====
-st.subheader("🤖 自动选股（V3.0）")
-
-if st.button("开始自动选股"):
-    stock_list = [
-        "000001", "000858", "600036",
-        "600519", "300750", "002415"
-    ]
-
-    df_select = auto_select_stocks(stock_list)
-
-    if df_select is not None:
-        st.dataframe(df_select)
-    else:
-        st.write("暂无结果")
-      # ===== GPT分析（完整）=====
-        prompt = f"""
+            # ===== GPT分析（完整）=====
+            prompt = f"""
 你是专业A股分析师，请基于以下数据输出完整分析报告：
 
 股票代码：{stock_code}
@@ -364,42 +344,59 @@ MACD：{latest['MACD']:.2f}
 4. 买卖建议（必须明确）
 """
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
-        )
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}]
+            )
 
-        result = response.choices[0].message.content
+            result = response.choices[0].message.content
 
-        # ===== 提取建议 =====
-        advice = "未知"
+            # ===== 提取建议 =====
+            advice = "未知"
 
-        if "强烈看多" in result:
+            if "强烈看多" in result:
                 advice = "强烈看多"
-        elif "轻仓" in result:
+            elif "轻仓" in result:
                 advice = "轻仓"
-        elif "观望" in result:
+            elif "观望" in result:
                 advice = "观望"
-        elif "不建议" in result:
-            advice = "不建议"
+            elif "不建议" in result:
+                advice = "不建议"
 
-        st.success("✅ 分析完成")
+            st.success("✅ 分析完成")
 
-        st.subheader("📊 核心数据")
-        st.write(f"当前价格：{price}")
-        st.write(f"短线趋势：{short_trend}")
-        st.write(f"波段趋势：{mid_trend}")
-        st.write(f"评分：{score}/100")
+            st.subheader("📊 核心数据")
+            st.write(f"当前价格：{price}")
+            st.write(f"短线趋势：{short_trend}")
+            st.write(f"波段趋势：{mid_trend}")
+            st.write(f"评分：{score}/100")
 
-        st.subheader("📊 AI分析报告")
-        st.write(result)
+            st.subheader("📊 AI分析报告")
+            st.write(result)
 
-        # 保存记录
-        save_record(stock_code, price, short_trend, mid_trend, score, advice)
-
+            # 保存记录
+            save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
+
+
+# ===== 自动选股（V3.0）=====
+st.subheader("🤖 自动选股（V3.0）")
+
+if st.button("开始自动选股"):
+
+    stock_list = [
+        "000001", "000858", "600036",
+        "600519", "300750", "002415"
+    ]
+
+    df_select = auto_select_stocks(stock_list)
+
+    if df_select is not None:
+        st.dataframe(df_select)
+    else:
+        st.write("暂无结果")
 
 # ===== 复盘按钮（修复版）=====
 st.subheader("📊 历史预测复盘")
