@@ -335,7 +335,7 @@ if st.button("开始自动选股"):
     else:
         st.write("暂无结果")
       # ===== GPT分析（完整）=====
-            prompt = f"""
+        prompt = f"""
 你是专业A股分析师，请基于以下数据输出完整分析报告：
 
 股票代码：{stock_code}
