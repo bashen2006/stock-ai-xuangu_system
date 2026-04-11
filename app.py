@@ -169,35 +169,35 @@ MACD：{latest['MACD']:.2f}
 4. 买卖建议（必须明确）
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-)
+            response = client.chat.completions.create(
+               model="gpt-4o-mini",
+               messages=[{"role": "user", "content": prompt}]
+            )
 
-    result = response.choices[0].message.content
+            result = response.choices[0].message.content
 
-    # ===== 提取建议 =====
-    advice = "未知"
+            # ===== 提取建议 =====
+            advice = "未知"
 
-    if "强烈看多" in result:
-        advice = "强烈看多"
-    elif "轻仓" in result:
-        advice = "轻仓"
-    elif "观望" in result:
-        advice = "观望"
-    elif "不建议" in result:
-        advice = "不建议"
+            if "强烈看多" in result:
+              advice = "强烈看多"
+            elif "轻仓" in result:
+                advice = "轻仓"
+            elif "观望" in result:
+                advice = "观望"
+            elif "不建议" in result:
+            advice = "不建议"
 
-    st.success("✅ 分析完成")
+            st.success("✅ 分析完成")
 
-    st.subheader("📊 核心数据")
-    st.write(f"当前价格：{price}")
-    st.write(f"短线趋势：{short_trend}")
-    st.write(f"波段趋势：{mid_trend}")
-    st.write(f"评分：{score}/100")
+            st.subheader("📊 核心数据")
+            st.write(f"当前价格：{price}")
+            st.write(f"短线趋势：{short_trend}")
+            st.write(f"波段趋势：{mid_trend}")
+            st.write(f"评分：{score}/100")
 
-    st.subheader("📊 AI分析报告")
-    st.write(result)
+            st.subheader("📊 AI分析报告")
+            st.write(result)
 
     # ===== 保存记录 =====
     save_record(stock_code, price, short_trend, mid_trend, score, advice)
