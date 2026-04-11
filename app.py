@@ -13,6 +13,9 @@ st.caption("版本：V1.3")
 
 st.markdown("""
 ### 📢 更新日志
+- V1.3：
+  - 修复复盘系统结构问题
+
 - V1.1：
   - 增加版本号显示
   - 增加更新日志展示
@@ -25,7 +28,7 @@ st.markdown("""
 
 stock_code = st.text_input("请输入股票代码（如：000001）")
 
-# ===== 新增记录函数 =====
+# ===== 保存记录 =====
 def save_record(stock_code, price, short_trend, mid_trend, score, advice):
     file = "records.csv"
 
@@ -48,7 +51,8 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
-# ===== 技术指标计算 =====
+
+# ===== 技术指标 =====
 def calculate_indicators(df):
     df['MA5'] = df['收盘'].rolling(5).mean()
     df['MA10'] = df['收盘'].rolling(10).mean()
@@ -70,7 +74,7 @@ def calculate_indicators(df):
 
     return df
 
-# ===== 趋势判断 =====
+# ===== 趋势 =====
 def get_trend(df):
     latest = df.iloc[-1]
 
@@ -86,34 +90,72 @@ def get_trend(df):
 
     return short_trend, mid_trend
 
-# ===== 评分系统 =====
+# ===== 评分 =====
 def calculate_score(df, price, support, pressure):
     score = 0
 
     latest = df.iloc[-1]
 
-    # 趋势
     if latest['MA5'] > latest['MA10']:
         score += 15
     if latest['MA20'] > latest['MA60']:
         score += 15
 
-    # 位置
     if price < (support + (pressure - support) * 0.3):
         score += 25
     elif price < (support + (pressure - support) * 0.6):
         score += 15
 
-    # RSI
     if 30 < latest['RSI'] < 60:
         score += 15
 
-    # MACD
     if latest['MACD'] > latest['SIGNAL']:
         score += 20
 
     return score
 
+# ===== 复盘系统（修复版）=====
+def check_performance():
+    file = "records.csv"
+
+    if not os.path.exists(file):
+        return None
+
+    df = pd.read_csv(file)
+    results = []
+
+    for index, row in df.iterrows():
+        stock = row["股票"]
+        old_price = row["价格"]
+        advice = row["建议"]
+
+        try:
+            df_new = ak.stock_zh_a_hist(symbol=stock)
+            time.sleep(1)
+            current_price = df_new.iloc[-1]['收盘']
+
+            if "看多" in advice or "轻仓" in advice:
+                if current_price > old_price:
+                    result = "✅ 正确"
+                else:
+                    result = "❌ 错误"
+            else:
+                result = "⚪ 未判断"
+
+            results.append({
+                "股票": stock,
+                "当时价格": old_price,
+                "当前价格": current_price,
+                "建议": advice,
+                "结果": result
+            })
+
+        except:
+            continue
+
+    return pd.DataFrame(results)
+
+# ===== 主分析 =====
 if st.button("开始分析"):
 
     if stock_code:
@@ -136,10 +178,9 @@ if st.button("开始分析"):
             low_60 = df['最低'].tail(60).min()
 
             short_trend, mid_trend = get_trend(df)
-
             score = calculate_score(df, price, low_20, high_20)
 
-            # ===== GPT分析 =====
+            # ===== GPT分析（完整）=====
             prompt = f"""
 你是专业A股分析师，请基于以下数据输出完整分析报告：
 
@@ -170,8 +211,8 @@ MACD：{latest['MACD']:.2f}
 """
 
             response = client.chat.completions.create(
-               model="gpt-4o-mini",
-               messages=[{"role": "user", "content": prompt}]
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}]
             )
 
             result = response.choices[0].message.content
@@ -180,7 +221,7 @@ MACD：{latest['MACD']:.2f}
             advice = "未知"
 
             if "强烈看多" in result:
-              advice = "强烈看多"
+                advice = "强烈看多"
             elif "轻仓" in result:
                 advice = "轻仓"
             elif "观望" in result:
@@ -199,57 +240,19 @@ MACD：{latest['MACD']:.2f}
             st.subheader("📊 AI分析报告")
             st.write(result)
 
-            # ===== 保存记录 =====
+            # 保存记录
             save_record(stock_code, price, short_trend, mid_trend, score, advice)
-            st.subheader("📊 历史预测复盘")
-
-            if st.button("查看预测结果"):
-                df_result = check_performance()
-
-            if df_result is not None:
-                st.dataframe(df_result)
-            else:
-                st.write("暂无记录")
-            def check_performance():
-                file = "records.csv"
-
-            if not os.path.exists(file):
-                return None
-
-                df = pd.read_csv(file)
-
-            results = []
-
-            for index, row in df.iterrows():
-                stock = row["股票"]
-                old_price = row["价格"]
-                advice = row["建议"]
-
-                try:
-                    df_new = ak.stock_zh_a_hist(symbol=stock)
-                    time.sleep(1)
-                    current_price = df_new.iloc[-1]['收盘']
-
-                    if "看多" in advice or "轻仓" in advice:
-                        if current_price > old_price:
-                            result = "✅ 正确"
-                        else:
-                            result = "❌ 错误"
-                    else:
-                        result = "⚪ 未判断"
-
-                    results.append({
-                        "股票": stock,
-                        "当时价格": old_price,
-                        "当前价格": current_price,
-                        "建议": advice,
-                        "结果": result
-                    })
-
-                except:
-                    continue
-
-            return pd.DataFrame(results)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
+
+# ===== 复盘按钮（修复版）=====
+st.subheader("📊 历史预测复盘")
+
+if st.button("查看预测结果"):
+    df_result = check_performance()
+
+    if df_result is not None:
+        st.dataframe(df_result)
+    else:
+        st.write("暂无记录")
