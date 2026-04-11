@@ -186,7 +186,7 @@ MACD：{latest['MACD']:.2f}
             elif "观望" in result:
                 advice = "观望"
             elif "不建议" in result:
-            advice = "不建议"
+                advice = "不建议"
 
             st.success("✅ 分析完成")
 
@@ -199,8 +199,8 @@ MACD：{latest['MACD']:.2f}
             st.subheader("📊 AI分析报告")
             st.write(result)
 
-    # ===== 保存记录 =====
-    save_record(stock_code, price, short_trend, mid_trend, score, advice)
+            # ===== 保存记录 =====
+            save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
