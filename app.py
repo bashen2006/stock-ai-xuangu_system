@@ -211,7 +211,7 @@ MACD：{latest['MACD']:.2f}
             else:
                 st.write("暂无记录")
             def check_performance():
-    file = "records.csv"
+            file = "records.csv"
 
     if not os.path.exists(file):
         return None
