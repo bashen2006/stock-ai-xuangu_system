@@ -314,6 +314,21 @@ if st.button("开始分析"):
             short_trend, mid_trend = get_trend(df)
             score = calculate_score(df, price, low_20, high_20)
 
+          st.subheader("🤖 自动选股（V3.0）")
+
+if st.button("开始自动选股"):
+    stock_list = [
+        "000001", "000858", "600036",
+        "600519", "300750", "002415"
+    ]
+
+    df_select = auto_select_stocks(stock_list)
+
+    if df_select is not None:
+        st.dataframe(df_select)
+    else:
+        st.write("暂无结果")
+
             # ===== GPT分析（完整）=====
             prompt = f"""
 你是专业A股分析师，请基于以下数据输出完整分析报告：
@@ -399,3 +414,51 @@ if st.button("查看预测结果"):
             st.write(f"正确率：{accuracy:.2f}%")
     else:
         st.write("暂无记录")
+      # ===== 自动选股函数（V3.0）=====
+def auto_select_stocks(stock_list):
+    results = []
+
+    for stock_code in stock_list:
+        try:
+            df = get_stock_data(stock_code)
+
+            if df is None or df.empty:
+                continue
+
+            df = calculate_indicators(df)
+            latest = df.iloc[-1]
+
+            price = latest['收盘']
+            ma5 = latest['MA5']
+            ma10 = latest['MA10']
+            rsi = latest['RSI']
+
+            score = 0
+
+            # 趋势评分
+            if price > ma5:
+                score += 30
+            if ma5 > ma10:
+                score += 30
+
+            # RSI评分
+            if 40 < rsi < 70:
+                score += 40
+
+            results.append({
+                "股票": stock_code,
+                "价格": price,
+                "RSI": round(rsi, 2),
+                "评分": score
+            })
+
+        except:
+            continue
+
+    df_result = pd.DataFrame(results)
+
+    if df_result.empty:
+        return None
+
+    return df_result.sort_values(by="评分", ascending=False)
+      
