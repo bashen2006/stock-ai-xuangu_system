@@ -80,11 +80,11 @@ def get_stock_data(stock_code):
 
         df = pro.daily(
             ts_code=ts_code,
-            start_date="20220101",
-            end_date=datetime.now().strftime("%Y%m%d")
+            limit=100
         )
-      print("ts_code:", ts_code)
-      print(df)
+
+        print("ts_code:", ts_code)
+        print(df)
 
         if df is None or df.empty:
             return None
