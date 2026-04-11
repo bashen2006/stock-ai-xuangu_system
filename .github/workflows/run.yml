@@ -33,6 +33,6 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add auto_records.csv
+          git add auto_records.csv ai_summary.txt
           git commit -m "update auto records" || echo "No changes to commit"
           git push
