@@ -30,9 +30,13 @@ jobs:
           python auto_run.py
 
       - name: 提交结果文件
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git add auto_records.csv ai_summary.txt
-          git commit -m "update auto records" || echo "No changes to commit"
-          git push
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+
+        git add auto_records.csv || true
+        git add ai_summary.txt || true
+
+        git commit -m "update auto records" || echo "No changes to commit"
+
+        git push
