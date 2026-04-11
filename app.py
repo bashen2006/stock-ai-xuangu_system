@@ -9,7 +9,7 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V1.1")
+st.caption("版本：V1.3")
 
 st.markdown("""
 ### 📢 更新日志
