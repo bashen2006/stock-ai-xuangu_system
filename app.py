@@ -316,18 +316,18 @@ if st.button("开始分析"):
 
           st.subheader("🤖 自动选股（V3.0）")
 
-if st.button("开始自动选股"):
-    stock_list = [
-        "000001", "000858", "600036",
-        "600519", "300750", "002415"
-    ]
+          if st.button("开始自动选股"):
+              stock_list = [
+                  "000001", "000858", "600036",
+                  "600519", "300750", "002415"
+              ]
 
-    df_select = auto_select_stocks(stock_list)
+              df_select = auto_select_stocks(stock_list)
 
-    if df_select is not None:
-        st.dataframe(df_select)
-    else:
-        st.write("暂无结果")
+              if df_select is not None:
+                   st.dataframe(df_select)
+              else:
+                  st.write("暂无结果")
 
             # ===== GPT分析（完整）=====
             prompt = f"""
