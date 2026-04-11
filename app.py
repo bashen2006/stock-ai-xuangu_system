@@ -210,7 +210,7 @@ MACD：{latest['MACD']:.2f}
                 st.dataframe(df_result)
             else:
                 st.write("暂无记录")
-          def check_performance():
+            def check_performance():
     file = "records.csv"
 
     if not os.path.exists(file):
