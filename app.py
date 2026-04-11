@@ -214,7 +214,7 @@ MACD：{latest['MACD']:.2f}
                 file = "records.csv"
 
             if not os.path.exists(file):
-                return None
+            return None
 
                 df = pd.read_csv(file)
 
