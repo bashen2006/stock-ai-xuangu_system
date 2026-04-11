@@ -109,7 +109,7 @@ def get_stock_data(stock_code):
             adj='qfq',
             limit=100
         )
-      save_cache(stock_code, df)
+        save_cache(stock_code, df)
 
         print("ts_code:", ts_code)
         print(df)
