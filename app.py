@@ -58,7 +58,20 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
+# ===== 获取股票数据（带重试机制）=====
+def get_stock_data(stock_code):
+    import time
+    import akshare as ak
 
+    for i in range(3):  # 最多重试3次
+        try:
+            df = ak.stock_zh_a_hist(symbol=stock_code)
+            time.sleep(3)
+            return df
+        except:
+            time.sleep(4)
+
+    return None
 # ===== 技术指标 =====
 def calculate_indicators(df):
     df['MA5'] = df['收盘'].rolling(5).mean()
@@ -211,8 +224,11 @@ if st.button("开始分析"):
         st.write("🔍 分析中，请稍等...")
 
         try:
-            df = ak.stock_zh_a_hist(symbol=stock_code)
-            time.sleep(2)
+            df = get_stock_data(stock_code)
+
+            if df is None:
+                st.error("❌ 数据获取失败，请稍后再试")
+                st.stop()
 
             df = df.tail(100)
             df = calculate_indicators(df)
