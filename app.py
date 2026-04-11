@@ -135,7 +135,7 @@ def get_stock_data(stock_code):
             "open": "开盘",
             "high": "最高",
             "low": "最低",
-            "close": "收盘"
+            "close": "收盘",
             "vol": "成交量" 
         })
 
