@@ -69,7 +69,7 @@ def get_stock_data(stock_code):
 
     try:
         import os
-        ts.set_token(“6cae1531fff6f2f287d12e33001377c4b76f690dc68765b424df0cb2”)
+        ts.set_token("6cae1531fff6f2f287d12e33001377c4b76f690dc68765b424df0cb2")
         pro = ts.pro_api()
 
         # 转换股票代码
