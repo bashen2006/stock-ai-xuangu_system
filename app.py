@@ -136,6 +136,7 @@ def get_stock_data(stock_code):
             "high": "最高",
             "low": "最低",
             "close": "收盘"
+            "vol": "成交量" 
         })
 
         df = df.sort_values("日期")
