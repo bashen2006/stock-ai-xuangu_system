@@ -105,11 +105,11 @@ def get_stock_data(stock_code):
             ts_code = stock_code + ".SZ"
 
         df = ts.pro_bar(
-          save_cache(stock_code, df)
             ts_code=ts_code,
             adj='qfq',
             limit=100
         )
+      save_cache(stock_code, df)
 
         print("ts_code:", ts_code)
         print(df)
