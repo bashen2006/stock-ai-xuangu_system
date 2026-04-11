@@ -176,7 +176,7 @@ MACD：{latest['MACD']:.2f}
 
             result = response.choices[0].message.content
           # ===== 提取建议 =====
-            advice = "未知"
+advice = "未知"
 
 if "强烈看多" in result:
     advice = "强烈看多"
@@ -186,6 +186,7 @@ elif "观望" in result:
     advice = "观望"
 elif "不建议" in result:
     advice = "不建议"
+
 
             st.success("✅ 分析完成")
 
