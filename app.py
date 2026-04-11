@@ -60,48 +60,46 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
-# ===== 获取股票数据（缓存 + 主接口 + 备用接口）=====
+# ===== TuShare数据获取（稳定版）=====
 def get_stock_data(stock_code):
-    import time
-    import os
+    import tushare as ts
     import pandas as pd
-    import akshare as ak
+    from datetime import datetime
 
-    cache_file = f"cache_{stock_code}.csv"
-
-    # ===== 1️⃣ 先读缓存（60秒内直接返回）=====
-    if os.path.exists(cache_file):
-        try:
-            if time.time() - os.path.getmtime(cache_file) < 60:
-                return pd.read_csv(cache_file)
-        except:
-            pass
-
-    # ===== 2️⃣ 主接口（AkShare + 重试）=====
-    for i in range(5):
-        try:
-            df = ak.stock_zh_a_hist(symbol=stock_code)
-            time.sleep(5)
-
-            # 保存缓存
-            df.to_csv(cache_file, index=False)
-
-            return df
-        except:
-            time.sleep(6)
-
-    # ===== 3️⃣ 备用接口（东方财富）=====
     try:
-        df = ak.stock_zh_a_hist(symbol=stock_code, adjust="")
-        time.sleep(5)
+        ts.set_token(st.secrets["TUSHARE_TOKEN"])
+        pro = ts.pro_api()
 
-        df.to_csv(cache_file, index=False)
+        # 转换股票代码
+        if stock_code.startswith("6"):
+            ts_code = stock_code + ".SH"
+        else:
+            ts_code = stock_code + ".SZ"
+
+        df = pro.daily(
+            ts_code=ts_code,
+            start_date="20220101",
+            end_date=datetime.now().strftime("%Y%m%d")
+        )
+
+        if df is None or df.empty:
+            return None
+
+        # 转换字段（适配你原系统）
+        df = df.rename(columns={
+            "trade_date": "日期",
+            "open": "开盘",
+            "high": "最高",
+            "low": "最低",
+            "close": "收盘"
+        })
+
+        df = df.sort_values("日期")
 
         return df
-    except:
-        pass
 
-    return None
+    except Exception as e:
+        return None
 # ===== 技术指标 =====
 def calculate_indicators(df):
     df['MA5'] = df['收盘'].rolling(5).mean()
