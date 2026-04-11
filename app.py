@@ -6,7 +6,8 @@ import pandas as pd
 import time
 from openai import OpenAI
 
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+import os
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.title("📊 AI股票分析系统（专业版）")
 st.caption("版本：V2.2")
@@ -67,7 +68,8 @@ def get_stock_data(stock_code):
     from datetime import datetime
 
     try:
-        ts.set_token(st.secrets["TUSHARE_TOKEN"])
+        import os
+        ts.set_token(os.getenv("TUSHARE_TOKEN"))
         pro = ts.pro_api()
 
         # 转换股票代码
