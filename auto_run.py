@@ -61,6 +61,6 @@ for stock in stock_list:
     try:
         result = analyze_stock(stock)
         save_result(result)
-        time.sleep(2)
+        time.sleep(5)
     except:
         continue
