@@ -398,8 +398,8 @@ MACD：{latest['MACD']:.2f}
         save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
 
-        except Exception as e:
-            st.error(f"❌ 出错：{e}")
+    except Exception as e:
+        st.error(f"❌ 出错：{e}")
 
 # ===== 复盘按钮（修复版）=====
 st.subheader("📊 历史预测复盘")
