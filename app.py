@@ -9,10 +9,15 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V1.3")
+st.caption("版本：V1.4")
 
 st.markdown("""
 ### 📢 更新日志
+- V1.4：
+  - 时间差判断（记录分析时间，判断：是否超过7天 / 30天）
+  - 最大回撤（关键）判断有没有：❗ 买了之后先跌很多（容易被套）
+  - 止损判断：👉 如果跌破 -5%：❌ 判定错误
+  - AI自动总结错误原因（核心）👉 GPT会输出：为什么错，哪个指标判断错，下次怎么改
 - V1.3：
   - 修复复盘系统结构问题
 
@@ -128,26 +133,68 @@ def check_performance():
         stock = row["股票"]
         old_price = row["价格"]
         advice = row["建议"]
+        record_time = row["时间"]
 
         try:
             df_new = ak.stock_zh_a_hist(symbol=stock)
             time.sleep(1)
+
             current_price = df_new.iloc[-1]['收盘']
 
-            if "看多" in advice or "轻仓" in advice:
-                if current_price > old_price:
-                    result = "✅ 正确"
-                else:
-                    result = "❌ 错误"
+            # ===== 时间差 =====
+            days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
+
+            # ===== 最大回撤 =====
+            min_price = df_new['最低'].min()
+            drawdown = (min_price - old_price) / old_price * 100
+
+            # ===== 收益 =====
+            profit = (current_price - old_price) / old_price * 100
+
+            # ===== 判断逻辑 =====
+            if profit > 0:
+                result = "✅ 正确"
+            elif drawdown < -5:
+                result = "❌ 止损失败"
             else:
-                result = "⚪ 未判断"
+                result = "⚠️ 观察中"
+
+            # ===== AI分析错误 =====
+            summary = "暂无"
+
+            if "❌" in result:
+                prompt = f"""
+股票：{stock}
+当时价格：{old_price}
+当前价格：{current_price}
+跌幅：{drawdown:.2f}%
+
+请分析判断错误的原因：
+1. 是否趋势判断错误
+2. 是否买点过高
+3. 是否指标失效
+4. 下次如何改进
+"""
+
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    summary = response.choices[0].message.content
+                except:
+                    summary = "AI分析失败"
 
             results.append({
                 "股票": stock,
+                "天数": days,
                 "当时价格": old_price,
                 "当前价格": current_price,
+                "收益%": round(profit, 2),
+                "最大回撤%": round(drawdown, 2),
                 "建议": advice,
-                "结果": result
+                "结果": result,
+                "AI总结": summary
             })
 
         except:
@@ -254,5 +301,14 @@ if st.button("查看预测结果"):
 
     if df_result is not None:
         st.dataframe(df_result)
+
+        st.subheader("📊 统计分析")
+
+        total = len(df_result)
+        correct = len(df_result[df_result["结果"] == "✅ 正确"])
+
+        if total > 0:
+            accuracy = correct / total * 100
+            st.write(f"正确率：{accuracy:.2f}%")
     else:
         st.write("暂无记录")
