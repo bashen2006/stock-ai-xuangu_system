@@ -7,6 +7,19 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
+st.caption("版本：V1.1")
+
+st.markdown("""
+### 📢 更新日志
+- V1.1：
+  - 增加版本号显示
+  - 增加更新日志展示
+
+- V1.0：
+  - 基础AI分析系统
+  - 技术指标（MA / MACD / RSI）
+  - 趋势判断 + 评分系统
+""")
 
 stock_code = st.text_input("请输入股票代码（如：000001）")
 
