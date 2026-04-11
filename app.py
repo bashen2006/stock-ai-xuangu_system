@@ -61,6 +61,32 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
+  # ===== 缓存函数 =====
+def load_cache(stock_code):
+    import os
+    import pandas as pd
+    import time
+
+    file = f"cache_{stock_code}.csv"
+
+    if os.path.exists(file):
+        # 60秒内有效
+        if time.time() - os.path.getmtime(file) < 60:
+            try:
+                return pd.read_csv(file)
+            except:
+                return None
+    return None
+
+
+def save_cache(stock_code, df):
+    file = f"cache_{stock_code}.csv"
+    df.to_csv(file, index=False)
+  
+  # ===== 先读缓存 =====
+cache_df = load_cache(stock_code)
+if cache_df is not None:
+    return cache_df
 # ===== TuShare数据获取（稳定版）=====
 def get_stock_data(stock_code):
     import tushare as ts
@@ -79,6 +105,7 @@ def get_stock_data(stock_code):
             ts_code = stock_code + ".SZ"
 
         df = ts.pro_bar(
+            save_cache(stock_code, df)
             ts_code=ts_code,
             adj='qfq',
             limit=100
