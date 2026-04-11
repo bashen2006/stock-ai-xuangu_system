@@ -179,6 +179,55 @@ def get_trend(df):
 
     return short_trend, mid_trend
 
+# ===== 自动选股函数（V3.0）=====
+def auto_select_stocks(stock_list):
+    results = []
+
+    for stock_code in stock_list:
+        try:
+            df = get_stock_data(stock_code)
+
+            if df is None or df.empty:
+                continue
+
+            df = calculate_indicators(df)
+            latest = df.iloc[-1]
+
+            price = latest['收盘']
+            ma5 = latest['MA5']
+            ma10 = latest['MA10']
+            rsi = latest['RSI']
+
+            score = 0
+
+            # 趋势评分
+            if price > ma5:
+                score += 30
+            if ma5 > ma10:
+                score += 30
+
+            # RSI评分
+            if 40 < rsi < 70:
+                score += 40
+
+            results.append({
+                "股票": stock_code,
+                "价格": price,
+                "RSI": round(rsi, 2),
+                "评分": score
+            })
+
+        except:
+            continue
+
+    import pandas as pd
+    df_result = pd.DataFrame(results)
+
+    if df_result.empty:
+        return None
+
+    return df_result.sort_values(by="评分", ascending=False)
+
 # ===== 评分 =====
 def calculate_score(df, price, support, pressure):
     score = 0
