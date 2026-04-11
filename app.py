@@ -230,29 +230,69 @@ def auto_select_stocks(stock_list):
 
     return df_result.sort_values(by="评分", ascending=False)
 
-# ===== 评分 =====
-def calculate_score(df, price, support, pressure):
-    score = 0
+# ===== V3.1 多因子评分模型 =====
+def calculate_score(df, price, low_20, high_20):
 
     latest = df.iloc[-1]
 
-    if latest['MA5'] > latest['MA10']:
-        score += 15
-    if latest['MA20'] > latest['MA60']:
-        score += 15
+    ma5 = latest['MA5']
+    ma10 = latest['MA10']
+    ma20 = latest['MA20']
+    rsi = latest['RSI']
+    macd = latest['MACD']
 
-    if price < (support + (pressure - support) * 0.3):
-        score += 25
-    elif price < (support + (pressure - support) * 0.6):
-        score += 15
+    score = 0
 
-    if 30 < latest['RSI'] < 60:
-        score += 15
+    # =============================
+    # 1️⃣ 技术趋势（30分）
+    # =============================
+    if price > ma5:
+        score += 10
+    if ma5 > ma10:
+        score += 10
+    if ma10 > ma20:
+        score += 10
 
-    if latest['MACD'] > latest['SIGNAL']:
+    # =============================
+    # 2️⃣ 动量强度（20分）
+    # =============================
+    if 45 < rsi < 70:
+        score += 10
+    if macd > 0:
+        score += 10
+
+    # =============================
+    # 3️⃣ 位置结构（20分）🔥
+    # =============================
+    # 越接近支撑位越好
+    if price <= low_20 * 1.05:
         score += 20
+    elif price <= low_20 * 1.10:
+        score += 10
 
-    return score
+    # =============================
+    # 4️⃣ 资金情绪（20分）🔥
+    # =============================
+    # 简化：用放量 + 阳线代替资金
+    if latest['收盘'] > latest['开盘']:
+        score += 10
+
+    if df['成交量'].iloc[-1] > df['成交量'].rolling(5).mean().iloc[-1]:
+        score += 10
+
+    # =============================
+    # 5️⃣ 风险控制（-10分）🔥
+    # =============================
+    # 接近压力位扣分
+    if price >= high_20 * 0.95:
+        score -= 10
+
+    # RSI过高扣分
+    if rsi > 75:
+        score -= 5
+
+    return max(0, min(100, score))
+
 
 # ===== 复盘系统（修复版）=====
 def check_performance():
@@ -468,7 +508,8 @@ if st.button("查看预测结果"):
             st.write(f"正确率：{accuracy:.2f}%")
     else:
         st.write("暂无记录")
-      # ===== 自动选股函数（V3.0）=====
+
+# ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list):
     results = []
 
@@ -483,36 +524,28 @@ def auto_select_stocks(stock_list):
             latest = df.iloc[-1]
 
             price = latest['收盘']
-            ma5 = latest['MA5']
-            ma10 = latest['MA10']
-            rsi = latest['RSI']
 
-            score = 0
+            # ===== 新增（关键）=====
+            low_20 = df['最低'].tail(20).min()
+            high_20 = df['最高'].tail(20).max()
 
-            # 趋势评分
-            if price > ma5:
-                score += 30
-            if ma5 > ma10:
-                score += 30
-
-            # RSI评分
-            if 40 < rsi < 70:
-                score += 40
+            # ===== 使用统一评分模型 =====
+            score = calculate_score(df, price, low_20, high_20)
 
             results.append({
                 "股票": stock_code,
                 "价格": price,
-                "RSI": round(rsi, 2),
+                "RSI": round(latest['RSI'], 2),
                 "评分": score
             })
 
         except:
             continue
 
+    import pandas as pd
     df_result = pd.DataFrame(results)
 
     if df_result.empty:
         return None
 
     return df_result.sort_values(by="评分", ascending=False)
-      
