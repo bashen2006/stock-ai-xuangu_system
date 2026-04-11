@@ -201,6 +201,55 @@ MACD：{latest['MACD']:.2f}
 
             # ===== 保存记录 =====
             save_record(stock_code, price, short_trend, mid_trend, score, advice)
+            st.subheader("📊 历史预测复盘")
+
+            if st.button("查看预测结果"):
+                df_result = check_performance()
+
+            if df_result is not None:
+                st.dataframe(df_result)
+            else:
+                st.write("暂无记录")
+          def check_performance():
+    file = "records.csv"
+
+    if not os.path.exists(file):
+        return None
+
+    df = pd.read_csv(file)
+
+    results = []
+
+    for index, row in df.iterrows():
+        stock = row["股票"]
+        old_price = row["价格"]
+        advice = row["建议"]
+
+        try:
+            df_new = ak.stock_zh_a_hist(symbol=stock)
+            time.sleep(1)
+            current_price = df_new.iloc[-1]['收盘']
+
+            if "看多" in advice or "轻仓" in advice:
+                if current_price > old_price:
+                    result = "✅ 正确"
+                else:
+                    result = "❌ 错误"
+            else:
+                result = "⚪ 未判断"
+
+            results.append({
+                "股票": stock,
+                "当时价格": old_price,
+                "当前价格": current_price,
+                "建议": advice,
+                "结果": result
+            })
+
+        except:
+            continue
+
+    return pd.DataFrame(results)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
