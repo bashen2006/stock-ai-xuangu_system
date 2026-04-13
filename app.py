@@ -584,7 +584,7 @@ if st.button("开始分析"):
             low_60 = df['最低'].tail(60).min()
 
             short_trend, mid_trend = get_trend(df)
-            score = calculate_score(df, price, low_20, high_20)
+            score, _, _, _, _ = calculate_score_v2(df, price, low_20, high_20)
 
                    # ===== GPT分析（完整 + 热点判断）=====
             prompt = f"""
@@ -706,6 +706,10 @@ if st.button("开始自动选股"):
         st.stop()
 
     df_select = auto_select_stocks(stock_list)
+    if df_select is not None:
+        st.dataframe(df_select)
+    else:
+        st.write("暂无结果")
 
 # ===== 复盘按钮（修复版）=====
 st.subheader("📊 历史预测复盘")
