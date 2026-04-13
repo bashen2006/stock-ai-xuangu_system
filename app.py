@@ -225,6 +225,32 @@ def get_stock_pool():
 
     except:
         return None
+
+# ===== 智能过滤（关键）=====
+def filter_stocks(df):
+
+    latest = df.iloc[-1]
+
+    ma5 = latest['MA5']
+    ma10 = latest['MA10']
+    rsi = latest['RSI']
+    vol = latest['成交量']
+    vol_ma5 = latest['VOL_MA5']
+
+    # 趋势不能太弱
+    if ma5 < ma10:
+        return False
+
+    # 动量不能太差
+    if rsi < 35:
+        return False
+
+    # 没有资金不做
+    if vol < vol_ma5 * 0.8:
+        return False
+
+    return True
+
 # ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list):
     results = []
