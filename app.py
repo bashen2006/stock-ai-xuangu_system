@@ -171,6 +171,28 @@ def calculate_indicators(df):
     avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
+    
+        # ===== KDJ =====
+    low_min = df['最低'].rolling(9).min()
+    high_max = df['最高'].rolling(9).max()
+
+    df['RSV'] = (df['收盘'] - low_min) / (high_max - low_min) * 100
+    df['K'] = df['RSV'].ewm(com=2).mean()
+    df['D'] = df['K'].ewm(com=2).mean()
+    df['J'] = 3 * df['K'] - 2 * df['D']
+
+
+    # ===== 布林带 BOLL =====
+    df['MB'] = df['收盘'].rolling(20).mean()
+    df['STD'] = df['收盘'].rolling(20).std()
+
+    df['UPPER'] = df['MB'] + 2 * df['STD']
+    df['LOWER'] = df['MB'] - 2 * df['STD']
+
+
+    # ===== 成交量均线 =====
+    df['VOL_MA5'] = df['成交量'].rolling(5).mean()
+    df['VOL_MA10'] = df['成交量'].rolling(10).mean()
 
     return df
 
@@ -430,6 +452,17 @@ if st.button("开始分析"):
 
 RSI：{latest['RSI']:.2f}
 MACD：{latest['MACD']:.2f}
+
+KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
+
+布林带：
+上轨：{latest['UPPER']:.2f}
+中轨：{latest['MB']:.2f}
+下轨：{latest['LOWER']:.2f}
+
+成交量：
+当前：{latest['成交量']}
+均量：{latest['VOL_MA5']:.0f}
 
 评分：{score}/100
 
