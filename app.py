@@ -214,7 +214,7 @@ def auto_select_stocks(stock_list):
             price = latest['收盘']
 
             # ===== 替换成（新逻辑：双模式 + 分项评分））=====
-                        low_20 = df['最低'].tail(20).min()
+            low_20 = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
 
             score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
