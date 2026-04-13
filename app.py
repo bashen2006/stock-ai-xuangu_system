@@ -128,7 +128,7 @@ def get_stock_data(stock_code):
             return None
 
         # 转换字段（适配你原系统）
-                df = df.rename(columns={
+        df = df.rename(columns={
             "trade_date": "日期",
             "open": "开盘",
             "high": "最高",
