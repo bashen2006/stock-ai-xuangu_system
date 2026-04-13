@@ -407,7 +407,7 @@ if st.button("开始分析"):
             short_trend, mid_trend = get_trend(df)
             score = calculate_score(df, price, low_20, high_20)
 
-       # ===== GPT分析（完整 + 热点判断）=====
+                   # ===== GPT分析（完整 + 热点判断）=====
             prompt = f"""
 你是A股专业分析师，请基于以下数据进行综合分析：
 
@@ -445,54 +445,54 @@ MACD：{latest['MACD']:.2f}
 请用清晰结构输出
 """
 
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": prompt}]
-)
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}]
+            )
 
-result = response.choices[0].message.content
-
-
-# ===== 提取建议（保留你原逻辑）=====
-advice = "未知"
-
-if "强烈看多" in result:
-    advice = "强烈看多"
-elif "轻仓" in result:
-    advice = "轻仓"
-elif "观望" in result:
-    advice = "观望"
-elif "不建议" in result:
-    advice = "不建议"
+            result = response.choices[0].message.content
 
 
-# ===== 热点识别（新增）=====
-if "热点" in result:
-    hot_flag = "🔥 热点股"
-else:
-    hot_flag = "❄️ 非热点"
+            # ===== 提取建议（保留你原逻辑）=====
+            advice = "未知"
+
+            if "强烈看多" in result:
+                advice = "强烈看多"
+            elif "轻仓" in result:
+                advice = "轻仓"
+            elif "观望" in result:
+                advice = "观望"
+            elif "不建议" in result:
+                advice = "不建议"
 
 
-# ===== 页面输出 =====
-st.success("✅ 分析完成")
-
-st.subheader(f"📈 {stock_name}（{stock_code}）")
-
-st.subheader("📊 核心数据")
-st.write(f"当前价格：{price}")
-st.write(f"短线趋势：{short_trend}")
-st.write(f"波段趋势：{mid_trend}")
-st.write(f"评分：{score}/100")
-
-# ⭐ 新增热点展示
-st.write(f"市场定位：{hot_flag}")
-
-st.subheader("📊 AI分析报告")
-st.write(result)
+            # ===== 热点识别（新增）=====
+            if "热点" in result:
+                hot_flag = "🔥 热点股"
+            else:
+                hot_flag = "❄️ 非热点"
 
 
-# ===== 保存记录 =====
-save_record(stock_code, price, short_trend, mid_trend, score, advice)
+            # ===== 页面输出 =====
+            st.success("✅ 分析完成")
+
+            st.subheader(f"📈 {stock_name}（{stock_code}）")
+
+            st.subheader("📊 核心数据")
+            st.write(f"当前价格：{price}")
+            st.write(f"短线趋势：{short_trend}")
+            st.write(f"波段趋势：{mid_trend}")
+            st.write(f"评分：{score}/100")
+
+            # ⭐ 新增热点展示
+            st.write(f"市场定位：{hot_flag}")
+
+            st.subheader("📊 AI分析报告")
+            st.write(result)
+
+
+            # ===== 保存记录 =====
+            save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
