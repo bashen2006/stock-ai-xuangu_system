@@ -98,14 +98,13 @@ def save_cache(stock_code, df):
   
 # ===== TuShare数据获取（稳定版）=====
 def get_stock_data(stock_code):
-import tushare as ts
-import pandas as pd
-from datetime import datetime
+    import tushare as ts
+    import pandas as pd
+    from datetime import datetime
 
-```
-cache_df = load_cache(stock_code)
-if cache_df is not None:
-    return cache_df, "缓存"
+    cache_df = load_cache(stock_code)
+    if cache_df is not None:
+        return cache_df, "缓存"
 
 try:
     ts.set_token(st.secrets["TUSHARE_TOKEN"])
