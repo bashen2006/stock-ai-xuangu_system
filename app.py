@@ -15,7 +15,7 @@ st.caption("版本：V3.3")
 st.markdown("""
 ### 📢 更新日志
 - V3.3：双模式
-- V3.2：把“热点”加入评分：
+- V3.2：把“热点”加入总评分：
 - V3.1:调整自动选股函数
 - V3.0：
   - 增加“自动选股”
@@ -53,7 +53,7 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         "价格": price,
         "短线趋势": short_trend,
         "波段趋势": mid_trend,
-        "评分": score,
+        "总评分": score,
         "建议": advice
     }
 
@@ -243,7 +243,7 @@ def auto_select_stocks(stock_list):
     if df_result.empty:
         return None
 
-    return df_result.sort_values(by="评分", ascending=False)
+    return df_result.sort_values(by="总评分", ascending=False)
 
 # ===== 趋势 =====
 def get_trend(df):
@@ -552,7 +552,7 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
 当前：{latest['成交量']}
 均量：{latest['VOL_MA5']:.0f}
 
-评分：{score}/100
+总评分：{score}/100
 
 【请输出】
 1. 趋势分析
@@ -603,7 +603,7 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             st.write(f"当前价格：{price}")
             st.write(f"短线趋势：{short_trend}")
             st.write(f"波段趋势：{mid_trend}")
-            st.write(f"评分：{score}/100")
+            st.write(f"总评分：{score}/100")
 
             # ⭐ 新增热点展示
             st.write(f"市场定位：{hot_flag}")
