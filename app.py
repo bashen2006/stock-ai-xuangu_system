@@ -98,61 +98,52 @@ def save_cache(stock_code, df):
   
 # ===== TuShare数据获取（稳定版）=====
 def get_stock_data(stock_code):
-    import tushare as ts
-    import pandas as pd
-    from datetime import datetime
-    # ===== 先读缓存（必须在函数里）=====
-    cache_df = load_cache(stock_code)
-    if cache_df is not None:
-        return cache_df
+import tushare as ts
+import pandas as pd
+from datetime import datetime
+
+```
+cache_df = load_cache(stock_code)
+if cache_df is not None:
+    return cache_df, "缓存"
+
+try:
+    ts.set_token(st.secrets["TUSHARE_TOKEN"])
+    pro = ts.pro_api()
+
+    if stock_code.startswith("6"):
+        ts_code = stock_code + ".SH"
+    else:
+        ts_code = stock_code + ".SZ"
+
+    df = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
+
+    if df is None or df.empty:
+        return None, None   # ✅ 修复点
+
+    df = df.rename(columns={
+        "trade_date": "日期",
+        "open": "开盘",
+        "high": "最高",
+        "low": "最低",
+        "close": "收盘",
+        "vol": "成交量"
+    })
+
+    df = df.sort_values("日期")
+
     try:
-        import os
-        ts.set_token(st.secrets["TUSHARE_TOKEN"])
-        pro = ts.pro_api()
+        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
+        stock_name = basic.iloc[0]['name']
+    except:
+        stock_name = "未知"
 
-        # 转换股票代码
-        if stock_code.startswith("6"):
-            ts_code = stock_code + ".SH"
-        else:
-            ts_code = stock_code + ".SZ"
+    save_cache(stock_code, df)
 
-        df = ts.pro_bar(
-            ts_code=ts_code,
-            adj='qfq',
-            limit=100
-        )
-              
-        print("ts_code:", ts_code)
-        print(df)
+    return df, stock_name
 
-        if df is None or df.empty:
-            return None
-
-        # 转换字段（适配你原系统）
-        df = df.rename(columns={
-            "trade_date": "日期",
-            "open": "开盘",
-            "high": "最高",
-            "low": "最低",
-            "close": "收盘",
-            "vol": "成交量"
-        })
-
-        df = df.sort_values("日期")
-
-        # ===== 获取股票名称 =====
-        try:
-            basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
-            stock_name = basic.iloc[0]['name']
-        except:
-            stock_name = "未知"
-
-        save_cache(stock_code, df)
-
-        return df, stock_name
-
-    except Exception as e:
-        return None
+except:
+    return None, None   # ✅ 修复点
 # ===== 技术指标 =====
 def calculate_indicators(df):
     df['MA5'] = df['收盘'].rolling(5).mean()
@@ -252,67 +243,56 @@ def filter_stocks(df):
     return True
 
 # ===== 自动选股函数（V3.1）=====
-def auto_select_stocks(stock_list):
-    results = []
+def auto_select_stocks(stock_list, mode_type):   # ✅ 修复点
+results = []
 
-    # ===== 限制数量（防卡死）=====
-    stock_list = stock_list[:50]
+```
+stock_list = stock_list[:50]
 
-    for stock_code in stock_list:
-        try:
-            df, stock_name = get_stock_data(stock_code)
+for stock_code in stock_list:
+    try:
+        df, stock_name = get_stock_data(stock_code)
 
-            if df is None or df.empty:
-                continue
-
-            # ===== 指标计算 =====
-            df = calculate_indicators(df)
-
-            # ===== 过滤（关键）=====
-            if not filter_stocks(df):
-                continue
-
-            latest = df.iloc[-1]
-
-            price = latest['收盘']
-
-            # ===== 关键价位 =====
-            low_20 = df['最低'].tail(20).min()
-            high_20 = df['最高'].tail(20).max()
-
-            # ===== 双模式评分 =====
-            score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
-                df,
-                price,
-                low_20,
-                high_20,
-                mode=mode_type
-            )
-
-            # ===== 结果 =====
-            results.append({
-                "股票": stock_name,
-                "代码": stock_code,
-                "价格": price,
-                "RSI": round(latest['RSI'], 2),
-                "总评分": score,
-                "趋势分": trend_s,
-                "动量分": momentum_s,
-                "位置分": pos_s,
-                "资金分": vol_s,
-                "模式": "趋势" if mode_type == "trend" else "低吸"
-            })
-
-        except:
+        if df is None or df.empty:
             continue
 
-    import pandas as pd
-    df_result = pd.DataFrame(results)
+        df = calculate_indicators(df)
 
-    if df_result.empty:
-        return None
+        if not filter_stocks(df):
+            continue
 
-    return df_result.sort_values(by="总评分", ascending=False)
+        latest = df.iloc[-1]
+        price = latest['收盘']
+
+        low_20 = df['最低'].tail(20).min()
+        high_20 = df['最高'].tail(20).max()
+
+        score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
+            df, price, low_20, high_20, mode_type   # ✅ 修复点
+        )
+
+        results.append({
+            "股票": stock_name,
+            "代码": stock_code,
+            "价格": price,
+            "RSI": round(latest['RSI'], 2),
+            "总评分": score,
+            "趋势分": trend_s,
+            "动量分": momentum_s,
+            "位置分": pos_s,
+            "资金分": vol_s,
+            "模式": "趋势" if mode_type == "trend" else "低吸"
+        })
+
+    except Exception as e:   # ✅ 修复点
+        st.write(f"{stock_code} 出错: {e}")
+
+df_result = pd.DataFrame(results)
+
+if df_result.empty:
+    return None
+
+return df_result.sort_values(by="总评分", ascending=False)
 
 # ===== 趋势 =====
 def get_trend(df):
@@ -523,7 +503,9 @@ if st.button("开始分析"):
             low_60 = df['最低'].tail(60).min()
 
             short_trend, mid_trend = get_trend(df)
-            score, _, _, _, _ = calculate_score_v2(df, price, low_20, high_20)
+            score, _, _, _, _ = calculate_score_v2(
+            df, price, low_20, high_20, mode_type   # ✅ 修复点
+            )
 
                    # ===== GPT分析（完整 + 热点判断）=====
             prompt = f"""
@@ -644,7 +626,7 @@ if st.button("开始自动选股"):
         st.error("❌ 股票池获取失败")
         st.stop()
 
-    df_select = auto_select_stocks(stock_list)
+    df_select = auto_select_stocks(stock_list, mode_type)   # ✅ 修复点
     if df_select is not None:
         st.dataframe(df_select)
     else:
