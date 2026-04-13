@@ -228,6 +228,8 @@ def get_stock_pool():
 # ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list):
     results = []
+
+    # ===== 限制数量（防卡死）=====
     stock_list = stock_list[:50]
 
     for stock_code in stock_list:
@@ -237,19 +239,31 @@ def auto_select_stocks(stock_list):
             if df is None or df.empty:
                 continue
 
+            # ===== 指标计算 =====
             df = calculate_indicators(df)
+
+            # ===== 过滤（关键）=====
+            if not filter_stocks(df):
+                continue
+
             latest = df.iloc[-1]
 
             price = latest['收盘']
 
-            # ===== 替换成（新逻辑：双模式 + 分项评分））=====
+            # ===== 关键价位 =====
             low_20 = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
 
+            # ===== 双模式评分 =====
             score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
-                df, price, low_20, high_20, mode=mode_type
+                df,
+                price,
+                low_20,
+                high_20,
+                mode=mode_type
             )
 
+            # ===== 结果 =====
             results.append({
                 "股票": stock_name,
                 "代码": stock_code,
