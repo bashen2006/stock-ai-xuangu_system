@@ -414,67 +414,6 @@ def calculate_score_v2(df, price, low_20, high_20, mode="trend"):
 
     return total_score, trend_score, momentum_score, position_score, volume_score
 
-    # =============================
-    # 1️⃣ 趋势（25分）
-    # =============================
-    if price > ma5:
-        score += 8
-    if ma5 > ma10:
-        score += 8
-    if ma10 > ma20:
-        score += 9
-
-    # =============================
-    # 2️⃣ 动量（25分）
-    # =============================
-    if 45 < rsi < 70:
-        score += 8
-
-    if macd > 0:
-        score += 8
-
-    # KDJ（金叉）
-    if k > d:
-        score += 5
-
-    if j < 80:
-        score += 4
-
-    # =============================
-    # 3️⃣ 位置（20分）
-    # =============================
-    if price <= low_20 * 1.05:
-        score += 15
-    elif price <= low_20 * 1.10:
-        score += 8
-
-    # BOLL位置（低位更安全）
-    if price < lower:
-        score += 5
-
-    # =============================
-    # 4️⃣ 资金（20分）
-    # =============================
-    if price > latest['开盘']:
-        score += 8
-
-    if vol > vol_ma5:
-        score += 12
-
-    # =============================
-    # 5️⃣ 风险控制（-10分）
-    # =============================
-    if price >= high_20 * 0.95:
-        score -= 8
-
-    if rsi > 75:
-        score -= 5
-
-    if price > upper:
-        score -= 3
-
-    return max(0, min(100, score))
-
 # ===== 复盘系统（修复版）=====
 def check_performance():
     file = "records.csv"
