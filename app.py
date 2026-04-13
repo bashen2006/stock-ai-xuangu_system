@@ -127,19 +127,27 @@ def get_stock_data(stock_code):
             return None
 
         # 转换字段（适配你原系统）
-        df = df.rename(columns={
+                df = df.rename(columns={
             "trade_date": "日期",
             "open": "开盘",
             "high": "最高",
             "low": "最低",
             "close": "收盘",
-            "vol": "成交量" 
+            "vol": "成交量"
         })
 
         df = df.sort_values("日期")
+
+        # ===== 获取股票名称 =====
+        try:
+            basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
+            stock_name = basic.iloc[0]['name']
+        except:
+            stock_name = "未知"
+
         save_cache(stock_code, df)
 
-        return df
+        return df, stock_name
 
     except Exception as e:
         return None
@@ -171,7 +179,7 @@ def auto_select_stocks(stock_list):
 
     for stock_code in stock_list:
         try:
-            df = get_stock_data(stock_code)
+            df, stock_name = get_stock_data(stock_code)
 
             if df is None or df.empty:
                 continue
@@ -190,6 +198,7 @@ def auto_select_stocks(stock_list):
 
             results.append({
                 "股票": stock_code,
+                "代码": stock_code,
                 "价格": price,
                 "RSI": round(latest['RSI'], 2),
                 "评分": score
@@ -376,7 +385,7 @@ if st.button("开始分析"):
         st.write("🔍 分析中，请稍等...")
 
         try:
-            df = get_stock_data(stock_code)
+            df, stock_name = get_stock_data(stock_code)
 
             if df is None:
                 st.error("❌ 数据获取失败，请稍后再试")
@@ -397,13 +406,16 @@ if st.button("开始分析"):
             short_trend, mid_trend = get_trend(df)
             score = calculate_score(df, price, low_20, high_20)
 
-            # ===== GPT分析（完整）=====
-            prompt = f"""
-你是专业A股分析师，请基于以下数据输出完整分析报告：
+       # ===== GPT分析（完整 + 热点判断）=====
+prompt = f"""
+你是A股专业分析师，请基于以下数据进行综合分析：
 
-股票代码：{stock_code}
+【股票信息】
+名称：{stock_name}
+代码：{stock_code}
 当前价格：{price}
 
+【技术数据】
 短线趋势：{short_trend}
 波段趋势：{mid_trend}
 
@@ -420,45 +432,66 @@ MACD：{latest['MACD']:.2f}
 
 评分：{score}/100
 
-请输出：
+【请输出】
 1. 趋势分析
-2. 是否会上涨（概率）
-3. 是否会被套
-4. 买卖建议（必须明确）
+2. 是否会上涨（给出概率）
+3. 是否容易被套
+4. 所属行业
+5. 是否属于当前热点（AI/新能源/半导体等）
+6. 主力资金情况
+7. 买卖建议（必须明确：强烈看多 / 轻仓 / 观望 / 不建议）
+
+请用清晰结构输出
 """
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}]
-            )
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": prompt}]
+)
 
-            result = response.choices[0].message.content
+result = response.choices[0].message.content
 
-            # ===== 提取建议 =====
-            advice = "未知"
 
-            if "强烈看多" in result:
-                advice = "强烈看多"
-            elif "轻仓" in result:
-                advice = "轻仓"
-            elif "观望" in result:
-                advice = "观望"
-            elif "不建议" in result:
-                advice = "不建议"
+# ===== 提取建议（保留你原逻辑）=====
+advice = "未知"
 
-            st.success("✅ 分析完成")
+if "强烈看多" in result:
+    advice = "强烈看多"
+elif "轻仓" in result:
+    advice = "轻仓"
+elif "观望" in result:
+    advice = "观望"
+elif "不建议" in result:
+    advice = "不建议"
 
-            st.subheader("📊 核心数据")
-            st.write(f"当前价格：{price}")
-            st.write(f"短线趋势：{short_trend}")
-            st.write(f"波段趋势：{mid_trend}")
-            st.write(f"评分：{score}/100")
 
-            st.subheader("📊 AI分析报告")
-            st.write(result)
+# ===== 热点识别（新增）=====
+if "热点" in result:
+    hot_flag = "🔥 热点股"
+else:
+    hot_flag = "❄️ 非热点"
 
-            # 保存记录
-            save_record(stock_code, price, short_trend, mid_trend, score, advice)
+
+# ===== 页面输出 =====
+st.success("✅ 分析完成")
+
+st.subheader(f"📈 {stock_name}（{stock_code}）")
+
+st.subheader("📊 核心数据")
+st.write(f"当前价格：{price}")
+st.write(f"短线趋势：{short_trend}")
+st.write(f"波段趋势：{mid_trend}")
+st.write(f"评分：{score}/100")
+
+# ⭐ 新增热点展示
+st.write(f"市场定位：{hot_flag}")
+
+st.subheader("📊 AI分析报告")
+st.write(result)
+
+
+# ===== 保存记录 =====
+save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
