@@ -196,10 +196,39 @@ def calculate_indicators(df):
     df['VOL_MA10'] = df['成交量'].rolling(10).mean()
 
     return df
+# ===== 自动股票池 =====
+def get_stock_pool():
 
+    import tushare as ts
+
+    ts.set_token(st.secrets["TUSHARE_TOKEN"])
+    pro = ts.pro_api()
+
+    try:
+        df = pro.stock_basic(
+            exchange='',
+            list_status='L',
+            fields='ts_code,name'
+        )
+
+        df = df[~df['name'].str.contains('ST')]
+
+        df = df.head(100)
+
+        stock_list = []
+
+        for ts_code in df['ts_code']:
+            code = ts_code.split('.')[0]
+            stock_list.append(code)
+
+        return stock_list
+
+    except:
+        return None
 # ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list):
     results = []
+    stock_list = stock_list[:50]
 
     for stock_code in stock_list:
         try:
@@ -630,17 +659,13 @@ mode_type = "trend" if "趋势" in mode else "dip"
 # ===== 按钮 =====
 if st.button("开始自动选股"):
 
-    stock_list = [
-        "000001", "000858", "600036",
-        "600519", "300750", "002415"
-    ]
+    stock_list = get_stock_pool()
+
+    if stock_list is None:
+        st.error("❌ 股票池获取失败")
+        st.stop()
 
     df_select = auto_select_stocks(stock_list)
-
-    if df_select is not None:
-        st.dataframe(df_select)
-    else:
-        st.write("暂无结果")
 
 # ===== 复盘按钮（修复版）=====
 st.subheader("📊 历史预测复盘")
