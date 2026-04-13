@@ -408,7 +408,7 @@ if st.button("开始分析"):
             score = calculate_score(df, price, low_20, high_20)
 
        # ===== GPT分析（完整 + 热点判断）=====
-prompt = f"""
+            prompt = f"""
 你是A股专业分析师，请基于以下数据进行综合分析：
 
 【股票信息】
