@@ -262,61 +262,82 @@ def calculate_score(df, price, low_20, high_20):
     ma5 = latest['MA5']
     ma10 = latest['MA10']
     ma20 = latest['MA20']
+
     rsi = latest['RSI']
     macd = latest['MACD']
+
+    k = latest['K']
+    d = latest['D']
+    j = latest['J']
+
+    upper = latest['UPPER']
+    lower = latest['LOWER']
+
+    vol = latest['成交量']
+    vol_ma5 = latest['VOL_MA5']
 
     score = 0
 
     # =============================
-    # 1️⃣ 技术趋势（30分）
+    # 1️⃣ 趋势（25分）
     # =============================
     if price > ma5:
-        score += 10
+        score += 8
     if ma5 > ma10:
-        score += 10
+        score += 8
     if ma10 > ma20:
-        score += 10
+        score += 9
 
     # =============================
-    # 2️⃣ 动量强度（20分）
+    # 2️⃣ 动量（25分）
     # =============================
     if 45 < rsi < 70:
-        score += 10
+        score += 8
+
     if macd > 0:
-        score += 10
+        score += 8
+
+    # KDJ（金叉）
+    if k > d:
+        score += 5
+
+    if j < 80:
+        score += 4
 
     # =============================
-    # 3️⃣ 位置结构（20分）🔥
+    # 3️⃣ 位置（20分）
     # =============================
-    # 越接近支撑位越好
     if price <= low_20 * 1.05:
-        score += 20
+        score += 15
     elif price <= low_20 * 1.10:
-        score += 10
+        score += 8
+
+    # BOLL位置（低位更安全）
+    if price < lower:
+        score += 5
 
     # =============================
-    # 4️⃣ 资金情绪（20分）🔥
+    # 4️⃣ 资金（20分）
     # =============================
-    # 简化：用放量 + 阳线代替资金
-    if latest['收盘'] > latest['开盘']:
-        score += 10
+    if price > latest['开盘']:
+        score += 8
 
-    if df['成交量'].iloc[-1] > df['成交量'].rolling(5).mean().iloc[-1]:
-        score += 10
+    if vol > vol_ma5:
+        score += 12
 
     # =============================
-    # 5️⃣ 风险控制（-10分）🔥
+    # 5️⃣ 风险控制（-10分）
     # =============================
-    # 接近压力位扣分
     if price >= high_20 * 0.95:
-        score -= 10
+        score -= 8
 
-    # RSI过高扣分
     if rsi > 75:
         score -= 5
 
-    return max(0, min(100, score))
+    if price > upper:
+        score -= 3
 
+    return max(0, min(100, score))
 
 # ===== 复盘系统（修复版）=====
 def check_performance():
