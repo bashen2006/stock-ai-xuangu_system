@@ -10,10 +10,11 @@ import os
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V3.2")
+st.caption("版本：V3.3")
 
 st.markdown("""
 ### 📢 更新日志
+- V3.3：双模式
 - V3.2：把“热点”加入评分：
 - V3.1:调整自动选股函数
 - V3.0：
@@ -212,19 +213,25 @@ def auto_select_stocks(stock_list):
 
             price = latest['收盘']
 
-            # ===== 新增（关键）=====
-            low_20 = df['最低'].tail(20).min()
+            # ===== 替换成（新逻辑：双模式 + 分项评分））=====
+                        low_20 = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
 
-            # ===== 使用统一评分模型 =====
-            score = calculate_score(df, price, low_20, high_20)
+            score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
+                df, price, low_20, high_20, mode=mode_type
+            )
 
             results.append({
-                "股票": stock_code,
+                "股票": stock_name,
                 "代码": stock_code,
                 "价格": price,
                 "RSI": round(latest['RSI'], 2),
-                "评分": score
+                "总评分": score,
+                "趋势分": trend_s,
+                "动量分": momentum_s,
+                "位置分": pos_s,
+                "资金分": vol_s,
+                "模式": "趋势" if mode_type == "trend" else "低吸"
             })
 
         except:
@@ -255,7 +262,7 @@ def get_trend(df):
     return short_trend, mid_trend
 
 # ===== V3.1 多因子评分模型 =====
-def calculate_score(df, price, low_20, high_20):
+def calculate_score_v2(df, price, low_20, high_20, mode="trend"):
 
     latest = df.iloc[-1]
 
@@ -268,7 +275,6 @@ def calculate_score(df, price, low_20, high_20):
 
     k = latest['K']
     d = latest['D']
-    j = latest['J']
 
     upper = latest['UPPER']
     lower = latest['LOWER']
@@ -276,7 +282,68 @@ def calculate_score(df, price, low_20, high_20):
     vol = latest['成交量']
     vol_ma5 = latest['VOL_MA5']
 
-    score = 0
+    trend_score = 0
+    momentum_score = 0
+    position_score = 0
+    volume_score = 0
+    risk_score = 0
+
+    # =============================
+    # 模式1：趋势（追涨）
+    # =============================
+    if mode == "trend":
+
+        if price > ma5:
+            trend_score += 10
+        if ma5 > ma10:
+            trend_score += 10
+        if ma10 > ma20:
+            trend_score += 10
+
+        if rsi > 50:
+            momentum_score += 10
+        if macd > 0:
+            momentum_score += 10
+        if k > d:
+            momentum_score += 5
+
+        if vol > vol_ma5:
+            volume_score += 15
+
+        if price > latest['开盘']:
+            volume_score += 5
+
+    # =============================
+    # 模式2：潜力（低吸）
+    # =============================
+    else:
+
+        if price <= low_20 * 1.05:
+            position_score += 20
+
+        if rsi < 45:
+            momentum_score += 10
+
+        if price < lower:
+            position_score += 10
+
+        if k < 30:
+            momentum_score += 10
+
+    # =============================
+    # 风险控制（通用）
+    # =============================
+    if price >= high_20 * 0.95:
+        risk_score -= 10
+
+    if rsi > 75:
+        risk_score -= 5
+
+    total_score = trend_score + momentum_score + position_score + volume_score + risk_score
+
+    total_score = max(0, min(100, total_score))
+
+    return total_score, trend_score, momentum_score, position_score, volume_score
 
     # =============================
     # 1️⃣ 趋势（25分）
@@ -552,9 +619,15 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             st.error(f"❌ 出错：{e}")
 
 
-# ===== 自动选股（V3.0）=====
-st.subheader("🤖 自动选股（V3.0）")
+# ===== 自动选股（V3.4）=====
+st.subheader("🤖 自动选股（V3.4）")
+mode = st.selectbox(
+    "选择选股模式",
+    ["趋势（追涨）", "潜力（低吸）"]
+)
 
+mode_type = "trend" if "趋势" in mode else "dip"
+# ===== 按钮 =====
 if st.button("开始自动选股"):
 
     stock_list = [
