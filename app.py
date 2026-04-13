@@ -6,7 +6,7 @@ import pandas as pd
 import time
 from openai import OpenAI
 
-import os
+# ❌ 删除重复的 import os（原第9行）
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
@@ -15,12 +15,12 @@ st.caption("版本：V3.3")
 st.markdown("""
 ### 📢 更新日志
 - V3.3：双模式
-- V3.2：把“热点”加入总评分：
+- V3.2：把"热点"加入总评分：
 - V3.1:调整自动选股函数
 - V3.0：
-  - 增加“自动选股”
+  - 增加"自动选股"
 - V2.2：
-  - 修改”数据源“
+  - 修改"数据源"
 - V2.1：
   - 自动运行，自动记录，自动保存
 - V1.4：
@@ -66,7 +66,8 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
-  # ===== 缓存函数 =====
+
+# ===== 缓存函数 =====  # ✅ 修复：注释去掉多余缩进，移出 save_record 函数
 def load_cache(stock_code):
     import os
     import pandas as pd
@@ -95,7 +96,7 @@ def load_cache(stock_code):
 def save_cache(stock_code, df):
     file = f"cache_{stock_code}.csv"
     df.to_csv(file, index=False)
-  
+
 # ===== TuShare数据获取（稳定版）=====
 def get_stock_data(stock_code):
     import tushare as ts
@@ -106,43 +107,45 @@ def get_stock_data(stock_code):
     if cache_df is not None:
         return cache_df, "缓存"
 
-try:
-    ts.set_token(st.secrets["TUSHARE_TOKEN"])
-    pro = ts.pro_api()
-
-    if stock_code.startswith("6"):
-        ts_code = stock_code + ".SH"
-    else:
-        ts_code = stock_code + ".SZ"
-
-    df = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
-
-    if df is None or df.empty:
-        return None, None   # ✅ 修复点
-
-    df = df.rename(columns={
-        "trade_date": "日期",
-        "open": "开盘",
-        "high": "最高",
-        "low": "最低",
-        "close": "收盘",
-        "vol": "成交量"
-    })
-
-    df = df.sort_values("日期")
-
+    # ✅ 修复：try/except 整体缩进到函数体内
     try:
-        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
-        stock_name = basic.iloc[0]['name']
+        ts.set_token(st.secrets["TUSHARE_TOKEN"])
+        pro = ts.pro_api()
+
+        if stock_code.startswith("6"):
+            ts_code = stock_code + ".SH"
+        else:
+            ts_code = stock_code + ".SZ"
+
+        df = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
+
+        if df is None or df.empty:
+            return None, None
+
+        df = df.rename(columns={
+            "trade_date": "日期",
+            "open": "开盘",
+            "high": "最高",
+            "low": "最低",
+            "close": "收盘",
+            "vol": "成交量"
+        })
+
+        df = df.sort_values("日期")
+
+        try:
+            basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
+            stock_name = basic.iloc[0]['name']
+        except:
+            stock_name = "未知"
+
+        save_cache(stock_code, df)
+
+        return df, stock_name
+
     except:
-        stock_name = "未知"
+        return None, None
 
-    save_cache(stock_code, df)
-
-    return df, stock_name
-
-except:
-    return None, None   # ✅ 修复点
 # ===== 技术指标 =====
 def calculate_indicators(df):
     df['MA5'] = df['收盘'].rolling(5).mean()
@@ -162,8 +165,8 @@ def calculate_indicators(df):
     avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
-    
-        # ===== KDJ =====
+
+    # ===== KDJ =====  # ✅ 修复：去掉多余缩进
     low_min = df['最低'].rolling(9).min()
     high_max = df['最高'].rolling(9).max()
 
@@ -172,7 +175,6 @@ def calculate_indicators(df):
     df['D'] = df['K'].ewm(com=2).mean()
     df['J'] = 3 * df['K'] - 2 * df['D']
 
-
     # ===== 布林带 BOLL =====
     df['MB'] = df['收盘'].rolling(20).mean()
     df['STD'] = df['收盘'].rolling(20).std()
@@ -180,12 +182,12 @@ def calculate_indicators(df):
     df['UPPER'] = df['MB'] + 2 * df['STD']
     df['LOWER'] = df['MB'] - 2 * df['STD']
 
-
     # ===== 成交量均线 =====
     df['VOL_MA5'] = df['成交量'].rolling(5).mean()
     df['VOL_MA10'] = df['成交量'].rolling(10).mean()
 
     return df
+
 # ===== 自动股票池 =====
 def get_stock_pool():
 
@@ -242,55 +244,56 @@ def filter_stocks(df):
     return True
 
 # ===== 自动选股函数（V3.1）=====
-def auto_select_stocks(stock_list, mode_type):   # ✅ 修复点
+def auto_select_stocks(stock_list, mode_type):
     results = []
 
-stock_list = stock_list[:50]
+    # ✅ 修复：以下所有代码缩进到函数体内
+    stock_list = stock_list[:50]
 
-for stock_code in stock_list:
-    try:
-        df, stock_name = get_stock_data(stock_code)
+    for stock_code in stock_list:
+        try:
+            df, stock_name = get_stock_data(stock_code)
 
-        if df is None or df.empty:
-            continue
+            if df is None or df.empty:
+                continue
 
-        df = calculate_indicators(df)
+            df = calculate_indicators(df)
 
-        if not filter_stocks(df):
-            continue
+            if not filter_stocks(df):
+                continue
 
-        latest = df.iloc[-1]
-        price = latest['收盘']
+            latest = df.iloc[-1]
+            price = latest['收盘']
 
-        low_20 = df['最低'].tail(20).min()
-        high_20 = df['最高'].tail(20).max()
+            low_20 = df['最低'].tail(20).min()
+            high_20 = df['最高'].tail(20).max()
 
-        score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
-            df, price, low_20, high_20, mode_type   # ✅ 修复点
-        )
+            score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
+                df, price, low_20, high_20, mode_type
+            )
 
-        results.append({
-            "股票": stock_name,
-            "代码": stock_code,
-            "价格": price,
-            "RSI": round(latest['RSI'], 2),
-            "总评分": score,
-            "趋势分": trend_s,
-            "动量分": momentum_s,
-            "位置分": pos_s,
-            "资金分": vol_s,
-            "模式": "趋势" if mode_type == "trend" else "低吸"
-        })
+            results.append({
+                "股票": stock_name,
+                "代码": stock_code,
+                "价格": price,
+                "RSI": round(latest['RSI'], 2),
+                "总评分": score,
+                "趋势分": trend_s,
+                "动量分": momentum_s,
+                "位置分": pos_s,
+                "资金分": vol_s,
+                "模式": "趋势" if mode_type == "trend" else "低吸"
+            })
 
-    except Exception as e:   # ✅ 修复点
-        st.write(f"{stock_code} 出错: {e}")
+        except Exception as e:
+            st.write(f"{stock_code} 出错: {e}")
 
-df_result = pd.DataFrame(results)
+    df_result = pd.DataFrame(results)
 
-if df_result.empty:
-    return None
+    if df_result.empty:
+        return None
 
-return df_result.sort_values(by="总评分", ascending=False)
+    return df_result.sort_values(by="总评分", ascending=False)
 
 # ===== 趋势 =====
 def get_trend(df):
@@ -475,6 +478,15 @@ def check_performance():
 
     return pd.DataFrame(results)
 
+# ===== 选股模式（提前定义，主分析也需要用）=====
+# ✅ 修复：mode_type 必须在"开始分析"按钮之前定义，否则按钮内引用会报 NameError
+st.subheader("🤖 自动选股（V3.4）")
+mode = st.selectbox(
+    "选择选股模式",
+    ["趋势（追涨）", "潜力（低吸）"]
+)
+mode_type = "trend" if "趋势" in mode else "dip"
+
 # ===== 主分析 =====
 if st.button("开始分析"):
 
@@ -501,11 +513,13 @@ if st.button("开始分析"):
             low_60 = df['最低'].tail(60).min()
 
             short_trend, mid_trend = get_trend(df)
+
+            # ✅ 修复：调用缩进对齐，mode_type 已在上方定义
             score, _, _, _, _ = calculate_score_v2(
-            df, price, low_20, high_20, mode_type   # ✅ 修复点
+                df, price, low_20, high_20, mode_type
             )
 
-                   # ===== GPT分析（完整 + 热点判断）=====
+            # ===== GPT分析（完整 + 热点判断）=====  # ✅ 修复：注释缩进对齐
             prompt = f"""
 你是A股专业分析师，请基于以下数据进行综合分析：
 
@@ -561,7 +575,6 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
 
             result = response.choices[0].message.content
 
-
             # ===== 提取建议（保留你原逻辑）=====
             advice = "未知"
 
@@ -574,13 +587,11 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             elif "不建议" in result:
                 advice = "不建议"
 
-
             # ===== 热点识别（新增）=====
             if "热点" in result:
                 hot_flag = "🔥 热点股"
             else:
                 hot_flag = "❄️ 非热点"
-
 
             # ===== 页面输出 =====
             st.success("✅ 分析完成")
@@ -599,7 +610,6 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             st.subheader("📊 AI分析报告")
             st.write(result)
 
-
             # ===== 保存记录 =====
             save_record(stock_code, price, short_trend, mid_trend, score, advice)
 
@@ -607,14 +617,6 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             st.error(f"❌ 出错：{e}")
 
 
-# ===== 自动选股（V3.4）=====
-st.subheader("🤖 自动选股（V3.4）")
-mode = st.selectbox(
-    "选择选股模式",
-    ["趋势（追涨）", "潜力（低吸）"]
-)
-
-mode_type = "trend" if "趋势" in mode else "dip"
 # ===== 按钮 =====
 if st.button("开始自动选股"):
 
@@ -624,7 +626,7 @@ if st.button("开始自动选股"):
         st.error("❌ 股票池获取失败")
         st.stop()
 
-    df_select = auto_select_stocks(stock_list, mode_type)   # ✅ 修复点
+    df_select = auto_select_stocks(stock_list, mode_type)
     if df_select is not None:
         st.dataframe(df_select)
     else:
@@ -641,12 +643,11 @@ if st.button("查看预测结果"):
 
         st.subheader("📊 统计分析")
 
-        total = len(df_result)
-    if df_result is not None and not df_result.empty and "结果" in df_result.columns:
-        correct = len(df_result[df_result["结果"] == "✅ 正确"])
-        total = len(df_result)
+        # ✅ 修复：删除无效的 total = len(df_result)（下方会重新赋值）
+        if not df_result.empty and "结果" in df_result.columns:
+            correct = len(df_result[df_result["结果"] == "✅ 正确"])
+            total = len(df_result)
 
-        st.write(f"正确率：{correct}/{total}")
+            st.write(f"正确率：{correct}/{total}")
     else:
         st.write("暂无复盘数据")
-
