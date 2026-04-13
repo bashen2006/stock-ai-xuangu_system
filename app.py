@@ -243,7 +243,7 @@ def filter_stocks(df):
 
 # ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list, mode_type):   # ✅ 修复点
-results = []
+    results = []
 
 ```
 stock_list = stock_list[:50]
