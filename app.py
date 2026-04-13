@@ -245,7 +245,6 @@ def filter_stocks(df):
 def auto_select_stocks(stock_list, mode_type):   # ✅ 修复点
     results = []
 
-```
 stock_list = stock_list[:50]
 
 for stock_code in stock_list:
