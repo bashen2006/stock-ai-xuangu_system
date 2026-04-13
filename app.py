@@ -10,10 +10,11 @@ import os
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V3.1")
+st.caption("版本：V3.2")
 
 st.markdown("""
 ### 📢 更新日志
+- V3.2：把“热点”加入评分：
 - V3.1:调整自动选股函数
 - V3.0：
   - 增加“自动选股”
