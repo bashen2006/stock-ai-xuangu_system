@@ -69,11 +69,7 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
     df_all.to_csv(file, index=False)
 
 # ===== 缓存函数 =====
-def load_cache(stock_code):
-    import os
-import pandas as pd
-from datetime import datetime
-
+# ✅ 修复：删除重复的第一个残缺定义，保留完整版
 def load_cache(stock_code):
 
     file = f"cache_{stock_code}.csv"
@@ -100,8 +96,6 @@ def load_cache(stock_code):
 
     except:
         return None
-
-    return None
 
 
 def save_cache(stock_code, df):
@@ -511,7 +505,7 @@ def explain_money_flow(state, score):
     else:
         return "暂无明显资金行为，建议观望。"
 
-# ===== 交易信号模块（专业版：买 + 卖分离）=====  # ✅ 修复：移到模块级别，不能放在 if st.button 块内
+# ===== 交易信号模块（专业版：买 + 卖分离）=====
 def generate_trade_signal(df, score, money_score):
 
     latest = df.iloc[-1]
@@ -616,6 +610,7 @@ def detect_start_signal(df):
     if price > high_20 and vol > vol_ma5:
         signal = "🔥 有效突破（启动）"
         strength += 30
+
     # =============================
     # ❌ 假突破（冲高回落）
     # =============================
@@ -811,10 +806,6 @@ if st.button("开始分析"):
             # ===== 资金行为分析 =====
             money_state, money_score = detect_money_flow(df)
             money_explain = explain_money_flow(money_state, money_score)
-            # ===== 启动识别 =====
-            start_signal, start_level, start_strength = detect_start_signal(df)
-            # ===== 启动信号影响评分 =====
-            score = apply_start_bonus(score, start_level, start_signal)
 
             high_20 = df['最高'].tail(20).max()
             low_20 = df['最低'].tail(20).min()
@@ -824,19 +815,24 @@ if st.button("开始分析"):
 
             short_trend, mid_trend = get_trend(df)
 
+            # ✅ 第1步：先算出 score
             score, _, _, _, _ = calculate_score_v2(
                 df, price, low_20, high_20, mode_type
             )
 
-          # ===== 移动止损处理 =====
-            if stop_loss is not None:
-                stop_loss = update_trailing_stop(stock_code, stop_loss)
-              
-            # ===== 交易信号 =====  # ✅ 修复：在此处调用，函数已移到模块级别
+            # ✅ 第2步：再做启动识别 + 修正 score
+            start_signal, start_level, start_strength = detect_start_signal(df)
+            score = apply_start_bonus(score, start_level, start_signal)
+
+            # ✅ 第3步：用修正后的 score 生成交易信号，得到 stop_loss
             final_signal, buy_price, stop_loss, take_profit, sell_signal = generate_trade_signal(
                 df, score, money_score
             )
             trade_logic = explain_trade_logic(score, money_score, latest['RSI'])
+
+            # ✅ 第4步：stop_loss 有值后才能做移动止损更新
+            if stop_loss is not None:
+                stop_loss = update_trailing_stop(stock_code, stop_loss)
 
             # ===== GPT分析（完整 + 热点判断）=====
             prompt = f"""
@@ -940,7 +936,7 @@ J={latest['J']:.2f}
 ❗ 必须结合"资金行为"分析
 ❗ 必须给"具体价格"
 ❗ 禁止只说"建议关注""可能上涨"
-❗ 必须判断“是否属于启动临界点（即将突破）”
+❗ 必须判断"是否属于启动临界点（即将突破）"
 """
 
             response = client.chat.completions.create(
