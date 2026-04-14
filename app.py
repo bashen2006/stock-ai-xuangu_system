@@ -70,25 +70,35 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
 # ===== 缓存函数 =====
 def load_cache(stock_code):
     import os
-    import pandas as pd
-    from datetime import datetime
+import pandas as pd
+from datetime import datetime
+
+def load_cache(stock_code):
 
     file = f"cache_{stock_code}.csv"
 
-    if os.path.exists(file):
-        try:
-            df = pd.read_csv(file)
+    if not os.path.exists(file):
+        return None
 
-            # 获取最后一条数据日期
-            last_date = str(df.iloc[-1]["日期"])
-            today = datetime.now().strftime("%Y%m%d")
+    try:
+        df = pd.read_csv(file)
 
-            # 如果是今天的数据，直接用缓存
-            if last_date == today:
-                return df
+        # 获取文件修改时间
+        file_time = datetime.fromtimestamp(os.path.getmtime(file))
 
-        except:
+        now = datetime.now()
+
+        # 计算时间差（秒）
+        diff_seconds = (now - file_time).total_seconds()
+
+        # ✅ 超过1小时（3600秒）就失效
+        if diff_seconds > 3600:
             return None
+
+        return df
+
+    except:
+        return None
 
     return None
 
