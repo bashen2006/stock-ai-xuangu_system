@@ -395,6 +395,64 @@ def calculate_score_v2(df, price, low_20, high_20, mode="trend"):
 
     return total_score, trend_score, momentum_score, position_score, volume_score
 
+# ===== 资金行为识别模块（V3.5）=====
+def detect_money_flow(df):
+
+    latest = df.iloc[-1]
+
+    price = latest['收盘']
+    open_price = latest['开盘']
+    vol = latest['成交量']
+
+    vol_ma5 = df['成交量'].rolling(5).mean().iloc[-1]
+    vol_ma10 = df['成交量'].rolling(10).mean().iloc[-1]
+
+    low_20 = df['最低'].tail(20).min()
+    high_20 = df['最高'].tail(20).max()
+
+    rsi = latest['RSI']
+
+    score = 0
+    state = "未知"
+
+    # =============================
+    # 1️⃣ 吸筹（低位 + 缩量）
+    # =============================
+    if price <= low_20 * 1.05 and vol < vol_ma5:
+        score += 30
+        state = "吸筹中"
+
+    # =============================
+    # 2️⃣ 试盘（放量 + 小涨）
+    # =============================
+    elif vol > vol_ma5 * 1.2 and price > open_price:
+        score += 40
+        state = "试盘"
+
+    # =============================
+    # 3️⃣ 拉升（放量上涨 + 突破）
+    # =============================
+    elif price > high_20 * 0.98 and vol > vol_ma10:
+        score += 60
+        state = "主力拉升"
+
+    # =============================
+    # 4️⃣ 出货（高位 + 放量滞涨）
+    # =============================
+    elif price >= high_20 * 0.95 and vol > vol_ma5 and price <= open_price:
+        score -= 40
+        state = "主力出货"
+
+    # =============================
+    # 风险修正
+    # =============================
+    if rsi > 75:
+        score -= 10
+
+    score = max(0, min(100, score))
+
+    return state, score
+
 # ===== 复盘系统（修复版）=====
 def check_performance():
     file = "records.csv"
