@@ -6,7 +6,6 @@ import pandas as pd
 import time
 from openai import OpenAI
 
-# ❌ 删除重复的 import os（原第9行）
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
@@ -68,7 +67,7 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
 
     df_all.to_csv(file, index=False)
 
-# ===== 缓存函数 =====  # ✅ 修复：注释去掉多余缩进，移出 save_record 函数
+# ===== 缓存函数 =====
 def load_cache(stock_code):
     import os
     import pandas as pd
@@ -108,7 +107,6 @@ def get_stock_data(stock_code):
     if cache_df is not None:
         return cache_df, "缓存"
 
-    # ✅ 修复：try/except 整体缩进到函数体内
     try:
         ts.set_token(st.secrets["TUSHARE_TOKEN"])
         pro = ts.pro_api()
@@ -167,7 +165,7 @@ def calculate_indicators(df):
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # ===== KDJ =====  # ✅ 修复：去掉多余缩进
+    # ===== KDJ =====
     low_min = df['最低'].rolling(9).min()
     high_max = df['最高'].rolling(9).max()
 
@@ -248,7 +246,6 @@ def filter_stocks(df):
 def auto_select_stocks(stock_list, mode_type):
     results = []
 
-    # ✅ 修复：以下所有代码缩进到函数体内
     stock_list = stock_list[:50]
 
     for stock_code in stock_list:
@@ -265,9 +262,9 @@ def auto_select_stocks(stock_list, mode_type):
 
             latest = df.iloc[-1]
             price = latest['收盘']
-          
+
             money_state, money_score = detect_money_flow(df)
-          
+
             low_20 = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
 
@@ -454,7 +451,8 @@ def detect_money_flow(df):
     score = max(0, min(100, score))
 
     return state, score
-  # ===== 资金行为解释 =====
+
+# ===== 资金行为解释 =====
 def explain_money_flow(state, score):
 
     if state == "吸筹中":
@@ -472,135 +470,7 @@ def explain_money_flow(state, score):
     else:
         return "暂无明显资金行为，建议观望。"
 
-# ===== 复盘系统（修复版）=====
-def check_performance():
-    file = "records.csv"
-
-    if not os.path.exists(file):
-        return None
-
-    df = pd.read_csv(file)
-    results = []
-
-    for index, row in df.iterrows():
-        stock = row["股票"]
-        old_price = row["价格"]
-        advice = row["建议"]
-        record_time = row["时间"]
-
-        try:
-            df_new = ak.stock_zh_a_hist(symbol=stock)
-            time.sleep(1)
-
-            current_price = df_new.iloc[-1]['收盘']
-
-            # ===== 时间差 =====
-            days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
-
-            # ===== 最大回撤 =====
-            min_price = df_new['最低'].min()
-            drawdown = (min_price - old_price) / old_price * 100
-
-            # ===== 收益 =====
-            profit = (current_price - old_price) / old_price * 100
-
-            # ===== 判断逻辑 =====
-            if profit > 0:
-                result = "✅ 正确"
-            elif drawdown < -5:
-                result = "❌ 止损失败"
-            else:
-                result = "⚠️ 观察中"
-
-            # ===== AI分析错误 =====
-            summary = "暂无"
-
-            if "❌" in result:
-                prompt = f"""
-股票：{stock}
-当时价格：{old_price}
-当前价格：{current_price}
-跌幅：{drawdown:.2f}%
-
-请分析判断错误的原因：
-1. 是否趋势判断错误
-2. 是否买点过高
-3. 是否指标失效
-4. 下次如何改进
-"""
-
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    summary = response.choices[0].message.content
-                except:
-                    summary = "AI分析失败"
-
-            results.append({
-                "股票": stock,
-                "天数": days,
-                "当时价格": old_price,
-                "当前价格": current_price,
-                "收益%": round(profit, 2),
-                "最大回撤%": round(drawdown, 2),
-                "建议": advice,
-                "结果": result,
-                "AI总结": summary
-            })
-
-        except:
-            continue
-
-    return pd.DataFrame(results)
-
-# ===== 选股模式（提前定义，主分析也需要用）=====
-# ✅ 修复：mode_type 必须在"开始分析"按钮之前定义，否则按钮内引用会报 NameError
-st.subheader("🤖 自动选股（V3.4）")
-mode = st.selectbox(
-    "选择选股模式",
-    ["趋势（追涨）", "潜力（低吸）"]
-)
-mode_type = "trend" if "趋势" in mode else "dip"
-
-# ===== 主分析 =====
-if st.button("开始分析"):
-
-    if stock_code:
-        st.write("🔍 分析中，请稍等...")
-
-        try:
-            df, stock_name = get_stock_data(stock_code)
-
-            if df is None:
-                st.error("❌ 数据获取失败，请稍后再试")
-                st.stop()
-
-            df = df.tail(100)
-            df = calculate_indicators(df)
-
-            latest = df.iloc[-1]
-            price = latest['收盘']
-          
-          # ===== 资金行为分析（插这里）=====
-            money_state, money_score = detect_money_flow(df)
-            money_explain = explain_money_flow(money_state, money_score)
-
-            high_20 = df['最高'].tail(20).max()
-            low_20 = df['最低'].tail(20).min()
-
-            high_60 = df['最高'].tail(60).max()
-            low_60 = df['最低'].tail(60).min()
-
-            short_trend, mid_trend = get_trend(df)
-
-            # ✅ 修复：调用缩进对齐，mode_type 已在上方定义
-            score, _, _, _, _ = calculate_score_v2(
-                df, price, low_20, high_20, mode_type
-            )
-
-# ===== 交易信号模块（专业版：买 + 卖分离）=====
+# ===== 交易信号模块（专业版：买 + 卖分离）=====  # ✅ 修复：移到模块级别，不能放在 if st.button 块内
 def generate_trade_signal(df, score, money_score):
 
     latest = df.iloc[-1]
@@ -692,10 +562,142 @@ def explain_trade_logic(score, money_score, rsi):
         text += "📊 市场处于正常波动区间。\n"
 
     return text
-          
-            # ===== GPT分析（完整 + 热点判断）=====  # ✅ 修复：注释缩进对齐
+
+# ===== 复盘系统（修复版）=====
+def check_performance():
+    file = "records.csv"
+
+    if not os.path.exists(file):
+        return None
+
+    df = pd.read_csv(file)
+    results = []
+
+    for index, row in df.iterrows():
+        stock = row["股票"]
+        old_price = row["价格"]
+        advice = row["建议"]
+        record_time = row["时间"]
+
+        try:
+            df_new = ak.stock_zh_a_hist(symbol=stock)
+            time.sleep(1)
+
+            current_price = df_new.iloc[-1]['收盘']
+
+            # ===== 时间差 =====
+            days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
+
+            # ===== 最大回撤 =====
+            min_price = df_new['最低'].min()
+            drawdown = (min_price - old_price) / old_price * 100
+
+            # ===== 收益 =====
+            profit = (current_price - old_price) / old_price * 100
+
+            # ===== 判断逻辑 =====
+            if profit > 0:
+                result = "✅ 正确"
+            elif drawdown < -5:
+                result = "❌ 止损失败"
+            else:
+                result = "⚠️ 观察中"
+
+            # ===== AI分析错误 =====
+            summary = "暂无"
+
+            if "❌" in result:
+                prompt = f"""
+股票：{stock}
+当时价格：{old_price}
+当前价格：{current_price}
+跌幅：{drawdown:.2f}%
+
+请分析判断错误的原因：
+1. 是否趋势判断错误
+2. 是否买点过高
+3. 是否指标失效
+4. 下次如何改进
+"""
+
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    summary = response.choices[0].message.content
+                except:
+                    summary = "AI分析失败"
+
+            results.append({
+                "股票": stock,
+                "天数": days,
+                "当时价格": old_price,
+                "当前价格": current_price,
+                "收益%": round(profit, 2),
+                "最大回撤%": round(drawdown, 2),
+                "建议": advice,
+                "结果": result,
+                "AI总结": summary
+            })
+
+        except:
+            continue
+
+    return pd.DataFrame(results)
+
+# ===== 选股模式（提前定义，主分析也需要用）=====
+st.subheader("🤖 自动选股（V3.4）")
+mode = st.selectbox(
+    "选择选股模式",
+    ["趋势（追涨）", "潜力（低吸）"]
+)
+mode_type = "trend" if "趋势" in mode else "dip"
+
+# ===== 主分析 =====
+if st.button("开始分析"):
+
+    if stock_code:
+        st.write("🔍 分析中，请稍等...")
+
+        try:
+            df, stock_name = get_stock_data(stock_code)
+
+            if df is None:
+                st.error("❌ 数据获取失败，请稍后再试")
+                st.stop()
+
+            df = df.tail(100)
+            df = calculate_indicators(df)
+
+            latest = df.iloc[-1]
+            price = latest['收盘']
+
+            # ===== 资金行为分析 =====
+            money_state, money_score = detect_money_flow(df)
+            money_explain = explain_money_flow(money_state, money_score)
+
+            high_20 = df['最高'].tail(20).max()
+            low_20 = df['最低'].tail(20).min()
+
+            high_60 = df['最高'].tail(60).max()
+            low_60 = df['最低'].tail(60).min()
+
+            short_trend, mid_trend = get_trend(df)
+
+            score, _, _, _, _ = calculate_score_v2(
+                df, price, low_20, high_20, mode_type
+            )
+
+            # ===== 交易信号 =====  # ✅ 修复：在此处调用，函数已移到模块级别
+            final_signal, buy_price, stop_loss, take_profit, sell_signal = generate_trade_signal(
+                df, score, money_score
+            )
+            trade_logic = explain_trade_logic(score, money_score, latest['RSI'])
+
+            # ===== GPT分析（完整 + 热点判断）=====
             prompt = f"""
-你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行“分析 + 交易决策”。
+你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行"分析 + 交易决策"。
 
 ==============================
 【股票信息】
@@ -792,9 +794,9 @@ J={latest['J']:.2f}
 
 【严格要求】
 ❗ 必须给明确结论（不能模糊）
-❗ 必须结合“资金行为”分析
-❗ 必须给“具体价格”
-❗ 禁止只说“建议关注”“可能上涨”
+❗ 必须结合"资金行为"分析
+❗ 必须给"具体价格"
+❗ 禁止只说"建议关注""可能上涨"
 """
 
             response = client.chat.completions.create(
@@ -804,7 +806,7 @@ J={latest['J']:.2f}
 
             result = response.choices[0].message.content
 
-            # ===== 提取建议（保留你原逻辑）=====
+            # ===== 提取建议 =====
             advice = "未知"
 
             if "强烈看多" in result:
@@ -816,7 +818,7 @@ J={latest['J']:.2f}
             elif "不建议" in result:
                 advice = "不建议"
 
-            # ===== 热点识别（新增）=====
+            # ===== 热点识别 =====
             if "热点" in result:
                 hot_flag = "🔥 热点股"
             else:
@@ -837,7 +839,7 @@ J={latest['J']:.2f}
             st.write(f"波段趋势：{mid_trend}")
             st.write(f"总评分：{score}/100")
 
-            # ⭐ 新增热点展示
+            # ⭐ 热点展示
             st.write(f"市场定位：{hot_flag}")
 
             st.subheader("📊 AI分析报告")
@@ -876,7 +878,6 @@ if st.button("查看预测结果"):
 
         st.subheader("📊 统计分析")
 
-        # ✅ 修复：删除无效的 total = len(df_result)（下方会重新赋值）
         if not df_result.empty and "结果" in df_result.columns:
             correct = len(df_result[df_result["结果"] == "✅ 正确"])
             total = len(df_result)
