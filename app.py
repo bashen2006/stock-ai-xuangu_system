@@ -10,10 +10,11 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V3.3")
+st.caption("版本：V3.5")
 
 st.markdown("""
 ### 📢 更新日志
+- V3.5：加入资金行为分析
 - V3.3：双模式
 - V3.2：把"热点"加入总评分：
 - V3.1:调整自动选股函数
@@ -264,12 +265,9 @@ def auto_select_stocks(stock_list, mode_type):
 
             latest = df.iloc[-1]
             price = latest['收盘']
+          
             money_state, money_score = detect_money_flow(df)
           
-          # ===== 资金行为分析 =====
-            money_state, money_score = detect_money_flow(df)
-            money_explain = explain_money_flow(money_state, money_score)
-
             low_20 = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
 
@@ -404,7 +402,6 @@ def calculate_score_v2(df, price, low_20, high_20, mode="trend"):
 def detect_money_flow(df):
 
     latest = df.iloc[-1]
-
     price = latest['收盘']
     open_price = latest['开盘']
     vol = latest['成交量']
@@ -585,6 +582,10 @@ if st.button("开始分析"):
 
             latest = df.iloc[-1]
             price = latest['收盘']
+          
+          # ===== 资金行为分析（插这里）=====
+money_state, money_score = detect_money_flow(df)
+money_explain = explain_money_flow(money_state, money_score)
 
             high_20 = df['最高'].tail(20).max()
             low_20 = df['最低'].tail(20).min()
@@ -681,7 +682,7 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             st.subheader("📊 核心数据")
             st.subheader("💰 主力资金行为")
             st.write(f"主力状态：{money_state}")
-          # ⭐ 新增解释
+            st.write(f"资金强度：{money_score}/100")
             st.info(money_explain)
             st.write(f"资金强度：{money_score}/100")
             st.write(f"当前价格：{price}")
