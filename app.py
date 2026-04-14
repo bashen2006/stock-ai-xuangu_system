@@ -456,6 +456,23 @@ def detect_money_flow(df):
     score = max(0, min(100, score))
 
     return state, score
+  # ===== 资金行为解释 =====
+def explain_money_flow(state, score):
+
+    if state == "吸筹中":
+        return "📥 主力在低位悄悄建仓，通常出现在底部区域。此阶段波动较小，但属于潜在机会区，可以开始关注。"
+
+    elif state == "试盘":
+        return "🟡 主力开始试探拉升，说明有资金开始进场，但还未确认趋势。此阶段容易出现震荡，建议观察是否持续放量。"
+
+    elif state == "主力拉升":
+        return "🚀 主力正在主动拉升，通常伴随放量突破。这是最强阶段，但要注意是否接近压力位，避免追高。"
+
+    elif state == "主力出货":
+        return "⚠️ 主力可能在高位派发筹码，风险较大。常见特征是放量但股价不涨，建议谨慎或回避。"
+
+    else:
+        return "暂无明显资金行为，建议观望。"
 
 # ===== 复盘系统（修复版）=====
 def check_performance():
