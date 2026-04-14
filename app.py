@@ -584,8 +584,8 @@ if st.button("开始分析"):
             price = latest['收盘']
           
           # ===== 资金行为分析（插这里）=====
-money_state, money_score = detect_money_flow(df)
-money_explain = explain_money_flow(money_state, money_score)
+            money_state, money_score = detect_money_flow(df)
+            money_explain = explain_money_flow(money_state, money_score)
 
             high_20 = df['最高'].tail(20).max()
             low_20 = df['最低'].tail(20).min()
