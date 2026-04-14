@@ -600,6 +600,92 @@ if st.button("开始分析"):
                 df, price, low_20, high_20, mode_type
             )
 
+ # ===== 交易信号模块（专业版：买 + 卖分离）=====
+def generate_trade_signal(df, score, money_score):
+
+    latest = df.iloc[-1]
+
+    price = latest['收盘']
+    ma5 = latest['MA5']
+    ma10 = latest['MA10']
+    rsi = latest['RSI']
+
+    high_20 = df['最高'].tail(20).max()
+    low_20 = df['最低'].tail(20).min()
+
+    # =============================
+    # 🟢 买入判断（Entry）
+    # =============================
+    can_buy = False
+
+    if score >= 60 and money_score >= 40 and price > ma5:
+        can_buy = True
+
+    # =============================
+    # 🔴 卖出判断（Exit）
+    # =============================
+    sell_signal = None
+
+    if rsi > 80:
+        sell_signal = "超买减仓"
+
+    elif price >= high_20 * 0.98:
+        sell_signal = "接近压力位，建议减仓"
+
+    elif price < ma10:
+        sell_signal = "跌破MA10，建议止损"
+
+    # =============================
+    # 🎯 最终决策
+    # =============================
+    final_signal = "观望"
+    buy_price = None
+    stop_loss = None
+    take_profit = None
+
+    if can_buy and sell_signal is None:
+        final_signal = "买入"
+
+        buy_price = round(price, 2)
+        stop_loss = round(min(low_20, ma10), 2)
+        take_profit = round(high_20 * 1.05, 2)
+
+    elif sell_signal is not None:
+        final_signal = "卖出"
+
+    return final_signal, buy_price, stop_loss, take_profit, sell_signal
+
+  # ===== 交易信号解释（中文化）=====
+def explain_trade_logic(score, money_score, rsi):
+
+    text = ""
+
+    # 趋势
+    if score >= 70:
+        text += "📈 当前趋势较强，属于上涨阶段。\n"
+    elif score >= 55:
+        text += "📊 当前处于震荡偏强阶段。\n"
+    else:
+        text += "📉 当前趋势偏弱，需谨慎。\n"
+
+    # 资金
+    if money_score >= 60:
+        text += "💰 主力资金明显进场。\n"
+    elif money_score >= 40:
+        text += "💰 有资金开始试探。\n"
+    else:
+        text += "💰 资金参与度较低。\n"
+
+    # RSI
+    if rsi > 75:
+        text += "⚠️ 当前处于高位，存在回调风险。\n"
+    elif rsi < 40:
+        text += "🟢 当前处于低位，具备反弹潜力。\n"
+    else:
+        text += "📊 市场处于正常波动区间。\n"
+
+    return text
+          
             # ===== GPT分析（完整 + 热点判断）=====  # ✅ 修复：注释缩进对齐
             prompt = f"""
 你是A股专业分析师，请基于以下数据进行综合分析：
