@@ -9,10 +9,11 @@ from openai import OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V3.5")
+st.caption("版本：V3.9")
 
 st.markdown("""
 ### 📢 更新日志
+- V3.9:启动识别增强模块
 - V3.5：加入资金行为分析
 - V3.3：双模式
 - V3.2：把"热点"加入总评分：
@@ -405,6 +406,36 @@ def calculate_score_v2(df, price, low_20, high_20, mode="trend"):
 
     return total_score, trend_score, momentum_score, position_score, volume_score
 
+# ===== 移动止损模块（只上移，不下降）=====
+def update_trailing_stop(stock_code, new_stop_loss):
+
+    import os
+
+    file = f"stoploss_{stock_code}.txt"
+
+    # 如果之前没有记录 → 直接写入
+    if not os.path.exists(file):
+        with open(file, "w") as f:
+            f.write(str(new_stop_loss))
+        return new_stop_loss
+
+    try:
+        # 读取旧止损
+        with open(file, "r") as f:
+            old_stop = float(f.read())
+
+        # ✅ 关键：只允许上移
+        final_stop = max(old_stop, new_stop_loss)
+
+        # 保存更新
+        with open(file, "w") as f:
+            f.write(str(final_stop))
+
+        return final_stop
+
+    except:
+        return new_stop_loss
+
 # ===== 资金行为识别模块（V3.5）=====
 def detect_money_flow(df):
 
@@ -535,6 +566,100 @@ def generate_trade_signal(df, score, money_score):
 
     return final_signal, buy_price, stop_loss, take_profit, sell_signal
 
+# ===== 启动识别增强模块（V3.9）=====
+def detect_start_signal(df):
+
+    latest = df.iloc[-1]
+
+    price = latest['收盘']
+    vol = latest['成交量']
+
+    ma5 = latest['MA5']
+    ma10 = latest['MA10']
+
+    high_20 = df['最高'].tail(20).max()
+
+    vol_ma5 = df['成交量'].rolling(5).mean().iloc[-1]
+    vol_recent = df['成交量'].tail(3).mean()
+
+    signal = "无启动迹象"
+    strength = 0
+
+    # =============================
+    # 1️⃣ 接近突破（临界点）
+    # =============================
+    if price > high_20 * 0.97:
+        signal = "⚠️ 接近突破"
+        strength += 30
+
+    # =============================
+    # 2️⃣ 放量（关键）
+    # =============================
+    if vol > vol_ma5 * 1.2:
+        strength += 20
+
+    # =============================
+    # 3️⃣ 连续放量（核心）
+    # =============================
+    if vol_recent > vol_ma5:
+        strength += 20
+
+    # =============================
+    # 4️⃣ 均线多头
+    # =============================
+    if ma5 > ma10:
+        strength += 10
+
+    # =============================
+    # 5️⃣ 真正突破（最强）
+    # =============================
+    if price > high_20 and vol > vol_ma5:
+        signal = "🔥 有效突破（启动）"
+        strength += 30
+    # =============================
+    # ❌ 假突破（冲高回落）
+    # =============================
+    if price > high_20 and latest['收盘'] < latest['开盘']:
+        signal = "❌ 假突破"
+        strength -= 20
+
+    # =============================
+    # 分类输出
+    # =============================
+    if strength >= 80:
+        level = "强启动"
+    elif strength >= 60:
+        level = "中启动"
+    elif strength >= 40:
+        level = "弱启动"
+    else:
+        level = "未启动"
+
+    return signal, level, strength
+
+# ===== 启动信号评分加成 =====
+def apply_start_bonus(score, start_level, start_signal):
+
+    # 强启动（直接加分）
+    if start_level == "强启动":
+        score += 15
+
+    # 中启动
+    elif start_level == "中启动":
+        score += 10
+
+    # 弱启动
+    elif start_level == "弱启动":
+        score += 5
+
+    # 假突破（必须扣分）
+    if "假突破" in start_signal:
+        score -= 20
+
+    # 限制范围
+    score = max(0, min(100, score))
+
+    return score
 
 # ===== 交易信号解释（中文化）=====
 def explain_trade_logic(score, money_score, rsi):
@@ -686,6 +811,10 @@ if st.button("开始分析"):
             # ===== 资金行为分析 =====
             money_state, money_score = detect_money_flow(df)
             money_explain = explain_money_flow(money_state, money_score)
+            # ===== 启动识别 =====
+            start_signal, start_level, start_strength = detect_start_signal(df)
+            # ===== 启动信号影响评分 =====
+            score = apply_start_bonus(score, start_level, start_signal)
 
             high_20 = df['最高'].tail(20).max()
             low_20 = df['最低'].tail(20).min()
@@ -699,6 +828,10 @@ if st.button("开始分析"):
                 df, price, low_20, high_20, mode_type
             )
 
+          # ===== 移动止损处理 =====
+            if stop_loss is not None:
+                stop_loss = update_trailing_stop(stock_code, stop_loss)
+              
             # ===== 交易信号 =====  # ✅ 修复：在此处调用，函数已移到模块级别
             final_signal, buy_price, stop_loss, take_profit, sell_signal = generate_trade_signal(
                 df, score, money_score
@@ -807,6 +940,7 @@ J={latest['J']:.2f}
 ❗ 必须结合"资金行为"分析
 ❗ 必须给"具体价格"
 ❗ 禁止只说"建议关注""可能上涨"
+❗ 必须判断“是否属于启动临界点（即将突破）”
 """
 
             response = client.chat.completions.create(
@@ -840,6 +974,11 @@ J={latest['J']:.2f}
             st.subheader(f"📈 {stock_name}（{stock_code}）")
 
             st.subheader("📊 核心数据")
+            # ===== 启动信号展示 =====
+            st.subheader("🚀 启动识别")
+            st.write(f"启动信号：{start_signal}")
+            st.write(f"启动等级：{start_level}")
+            st.write(f"启动强度：{start_strength}/100")
             st.subheader("💰 主力资金行为")
             st.write(f"主力状态：{money_state}")
             st.write(f"资金强度：{money_score}/100")
