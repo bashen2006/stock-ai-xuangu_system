@@ -264,6 +264,8 @@ def auto_select_stocks(stock_list, mode_type):
 
             latest = df.iloc[-1]
             price = latest['收盘']
+          # ===== 资金行为分析 =====
+            money_state, money_score = detect_money_flow(df)
 
             low_20 = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
