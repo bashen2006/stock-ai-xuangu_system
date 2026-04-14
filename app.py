@@ -659,6 +659,9 @@ KDJ：K={latest['K']:.2f} D={latest['D']:.2f} J={latest['J']:.2f}
             st.subheader(f"📈 {stock_name}（{stock_code}）")
 
             st.subheader("📊 核心数据")
+            st.subheader("💰 主力资金行为")
+            st.write(f"主力状态：{money_state}")
+            st.write(f"资金强度：{money_score}/100")
             st.write(f"当前价格：{price}")
             st.write(f"短线趋势：{short_trend}")
             st.write(f"波段趋势：{mid_trend}")
