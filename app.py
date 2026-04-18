@@ -48,10 +48,14 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.markdown("### 📊 AI股票分析系统（专业版）")
-st.caption("版本：V5.4")
+st.caption("版本：V5.5")
 
 st.markdown("""
 ### 📢 更新日志
+- V5.5：数据源能力检测
+  - 侧边栏新增"一键检测"按钮：自动检测 Tushare / JoinQuant / AKShare 三个数据源可用性
+  - JoinQuant 检测分两层：认证成功 + 持仓表是否可用，精确定位是哪层出问题
+  - 检测结果实时显示，不依赖手动试错
 - V5.4：容错机制完善
   - 持仓数据源调换优先级：Tushare 主，JoinQuant 降为补充（JoinQuant 免费版不稳定）
   - JoinQuant 字段校验：rename 前检查字段是否存在，缺失时显示原始数据而不是崩溃
@@ -164,15 +168,82 @@ st.markdown("""
 
 stock_code = st.text_input("请输入股票代码（如：000001）")
 
-# ===== 侧边栏：运行日志 =====
+# ===== 侧边栏 =====
 with st.sidebar:
+
+    # ── 数据源检测 ──
+    st.markdown("### 🛰️ 数据源检测")
+    if st.button("一键检测"):
+        results = []
+
+        # Tushare
+        try:
+            import tushare as ts
+            token = st.secrets.get("TUSHARE_TOKEN")
+            if not token:
+                results.append("❌ Tushare：未配置 Token")
+            else:
+                ts.set_token(token)
+                pro = ts.pro_api()
+                df_test = ts.pro_bar(ts_code="000001.SZ", adj="qfq", limit=1)
+                if df_test is not None and not df_test.empty:
+                    results.append("✅ Tushare 行情：可用")
+                else:
+                    results.append("⚠️ Tushare 行情：返回空")
+        except Exception as e:
+            results.append(f"❌ Tushare：{str(e)[:40]}")
+
+        # JoinQuant
+        jq_user = st.secrets.get("JQ_USERNAME")
+        jq_pass = st.secrets.get("JQ_PASSWORD")
+        if not jq_user or not jq_pass:
+            results.append("⚠️ JoinQuant：未配置账号")
+        else:
+            try:
+                import jqdatasdk as jq
+                jq.auth(jq_user, jq_pass)
+                results.append("✅ JoinQuant 认证：成功")
+
+                # 检测 STK_HOLDER_PERCENTAGE 表
+                try:
+                    from jqdatasdk import finance, query
+                    df_test = finance.run_query(
+                        query(finance.STK_HOLDER_PERCENTAGE).limit(1)
+                    )
+                    if df_test is not None and not df_test.empty:
+                        results.append("✅ JoinQuant 持仓表：可用")
+                    else:
+                        results.append("⚠️ JoinQuant 持仓表：存在但返回空")
+                except Exception as e:
+                    results.append(f"❌ JoinQuant 持仓表：{str(e)[:50]}")
+
+            except Exception as e:
+                results.append(f"❌ JoinQuant 认证失败：{str(e)[:40]}")
+
+        # AKShare 网络
+        try:
+            import akshare as ak
+            df_test = ak.stock_zh_a_hist(symbol="000001", period="daily", adjust="qfq")
+            if df_test is not None and not df_test.empty:
+                results.append("✅ AKShare：可用")
+            else:
+                results.append("⚠️ AKShare：返回空")
+        except Exception as e:
+            results.append(f"❌ AKShare：{str(e)[:40]}")
+
+        for r in results:
+            st.write(r)
+
+    st.markdown("---")
+
+    # ── 运行日志 ──
     st.markdown("### 🔍 运行日志")
     st.caption("每次操作后自动更新")
     try:
         with open(_LOG_FILE, encoding="utf-8") as f:
             lines = f.readlines()
         recent = "".join(lines[-50:]) if lines else "（暂无记录）"
-        st.text_area("最近50条", value=recent, height=400)
+        st.text_area("最近50条", value=recent, height=350)
     except FileNotFoundError:
         st.caption(f"暂无日志，路径：{_LOG_FILE}")
 
