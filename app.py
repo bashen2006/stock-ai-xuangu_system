@@ -16,7 +16,7 @@ logging.basicConfig(
 def translate_error(e):
     msg = str(e)
     if "ERROR" in msg:
-        return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / 被限流"
+        return "❌ TuShare接口异=常：可能原因 → Token未配置 / 积分不足 / 被限流"
     if "timeout" in msg.lower():
         return "❌ 网络超时：服务器响应过慢"
     if "connection" in msg.lower():
@@ -44,10 +44,13 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V4.9")
+st.caption("版本：V5.0")
 
 st.markdown("""
 ### 📢 更新日志
+- V5.0：热点识别修复
+  - 修复所有股票都显示"热点股"的 bug：原因是 GPT 回答里必然包含"热点"一词，导致误判
+  - 改为匹配明确肯定词（"属于当前热点"/"热点板块"等）并优先排除否定词（"不属于热点"/"非热点"等）
 - V4.9：缓存机制根本修复
   - 修复缓存永不过期的根本原因：Streamlit Cloud 部署时 clone 仓库会刷新文件修改时间，导致基于文件系统时间的判断失效
   - 改为在 CSV 内写入时间戳列 _cached_at，过期判断完全基于文件内容，不受部署影响
@@ -1436,11 +1439,19 @@ J={latest['J']:.2f}
             elif "不建议" in result:
                 advice = "不建议"
 
-            # ===== 热点识别 =====
-            if "热点" in result:
-                hot_flag = "🔥 热点股"
+            # ===== 热点识别（匹配明确肯定表述，避免"不属于热点"误判）=====
+            hot_keywords = ["属于当前热点", "属于热点", "热点行业", "热点板块", "是热点"]
+            cold_keywords = ["不属于热点", "非热点", "不是热点", "热度不高", "暂无热点"]
+            hot_flag = "❄️ 非热点"
+            for kw in cold_keywords:
+                if kw in result:
+                    hot_flag = "❄️ 非热点"
+                    break
             else:
-                hot_flag = "❄️ 非热点"
+                for kw in hot_keywords:
+                    if kw in result:
+                        hot_flag = "🔥 热点股"
+                        break
 
             # ===== 页面输出（V4.7 压缩版）=====
             import plotly.graph_objects as go
