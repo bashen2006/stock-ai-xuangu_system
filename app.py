@@ -209,7 +209,7 @@ def get_stock_pool():
 
         df = df[~df['name'].str.contains('ST')]
 
-        df = df.head(100)
+        df = df.head(500)
 
         stock_list = []
 
@@ -251,7 +251,7 @@ def filter_stocks(df):
 def auto_select_stocks(stock_list, mode_type):
     results = []
 
-    stock_list = stock_list[:50]
+    stock_list = stock_list[:100]
 
     for stock_code in stock_list:
         try:
@@ -703,6 +703,10 @@ def check_performance():
     df = pd.read_csv(file)
     results = []
 
+    import tushare as ts
+    ts.set_token(st.secrets["TUSHARE_TOKEN"])
+    pro = ts.pro_api()
+
     for index, row in df.iterrows():
         stock = row["股票"]
         old_price = row["价格"]
@@ -710,16 +714,22 @@ def check_performance():
         record_time = row["时间"]
 
         try:
-            df_new = ak.stock_zh_a_hist(symbol=stock)
-            time.sleep(1)
+            ts_code = stock + ".SH" if stock.startswith("6") else stock + ".SZ"
 
-            current_price = df_new.iloc[-1]['收盘']
+            df_new = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
+            time.sleep(0.3)  # Tushare 频率限制
+
+            if df_new is None or df_new.empty:
+                continue
+
+            df_new = df_new.sort_values("trade_date")
+            current_price = df_new.iloc[-1]['close']
 
             # ===== 时间差 =====
             days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
 
             # ===== 最大回撤 =====
-            min_price = df_new['最低'].min()
+            min_price = df_new['low'].min()
             drawdown = (min_price - old_price) / old_price * 100
 
             # ===== 收益 =====
