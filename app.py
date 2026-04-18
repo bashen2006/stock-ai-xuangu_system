@@ -9,7 +9,8 @@ from openai import OpenAI
 logging.basicConfig(
     filename="run.log",
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    force=True
 )
 
 # ===== 错误翻译（英文 → 中文）=====
@@ -30,13 +31,20 @@ def translate_error(e):
     return f"❌ 未知错误：{msg}"
 
 # ===== 日志辅助函数 =====
+def _write_log(level, msg):
+    try:
+        with open("run.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [{level}] {msg}\n")
+    except:
+        pass
+
 def log_error(msg):
-    logging.error(msg)
+    _write_log("ERROR", msg)
     print(msg)
     st.error(msg)
 
 def log_info(msg):
-    logging.info(msg)
+    _write_log("INFO", msg)
     print(msg)
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -151,13 +159,11 @@ stock_code = st.text_input("请输入股票代码（如：000001）")
 # ===== 侧边栏：运行日志 =====
 with st.sidebar:
     st.markdown("### 🔍 运行日志")
-    if st.button("刷新日志"):
-        pass  # 点击触发重新渲染
+    st.caption("每次操作后自动更新")
     try:
         with open("run.log", encoding="utf-8") as f:
             lines = f.readlines()
-        # 只显示最后50行
-        recent = "".join(lines[-50:])
+        recent = "".join(lines[-50:]) if lines else "（暂无记录）"
         st.text_area("最近50条", value=recent, height=400)
     except FileNotFoundError:
         st.caption("暂无日志（运行一次分析后即可看到）")
