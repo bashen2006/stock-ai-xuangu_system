@@ -44,10 +44,14 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V4.8")
+st.caption("版本：V4.9")
 
 st.markdown("""
 ### 📢 更新日志
+- V4.9：缓存机制根本修复
+  - 修复缓存永不过期的根本原因：Streamlit Cloud 部署时 clone 仓库会刷新文件修改时间，导致基于文件系统时间的判断失效
+  - 改为在 CSV 内写入时间戳列 _cached_at，过期判断完全基于文件内容，不受部署影响
+  - 旧格式缓存（无 _cached_at 列）自动视为过期，强制重新拉取
 - V4.8：稳定性修复
   - 修复 Tushare top_inst 必填参数 trade_date 报错
   - 全部替换废弃的 use_container_width → width='stretch'（消除 Streamlit 1.56 警告）
@@ -162,9 +166,7 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
     df_all.to_csv(file, index=False)
 
 # ===== 缓存函数 =====
-# ✅ 修复：删除重复的第一个残缺定义，保留完整版
 def load_cache(stock_code):
-
     file = f"cache_{stock_code}.csv"
 
     if not os.path.exists(file):
@@ -173,25 +175,23 @@ def load_cache(stock_code):
     try:
         df = pd.read_csv(file)
 
-        # 获取文件修改时间
-        file_time = datetime.fromtimestamp(os.path.getmtime(file))
-
-        now = datetime.now()
-
-        # 计算时间差（秒）
-        diff_seconds = (now - file_time).total_seconds()
-
-        # ✅ 超过30分钟（1800秒）就失效
-        if diff_seconds > 1800:
+        if "_cached_at" not in df.columns:
+            # 旧格式缓存，没有时间戳，直接视为过期
             return None
 
-        return df
+        cached_at = float(df["_cached_at"].iloc[0])
+        if time.time() - cached_at > 1800:
+            return None
+
+        return df.drop(columns=["_cached_at"])
 
     except:
         return None
 
 
 def save_cache(stock_code, df, stock_name=None):
+    df = df.copy()
+    df["_cached_at"] = time.time()
     df.to_csv(f"cache_{stock_code}.csv", index=False)
     if stock_name and stock_name != stock_code:
         with open(f"name_{stock_code}.txt", "w", encoding="utf-8") as f:
