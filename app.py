@@ -47,11 +47,14 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.set_page_config(layout="wide")
 
-st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V5.2")
+st.markdown("### 📊 AI股票分析系统（专业版）")
+st.caption("版本：V5.3")
 
 st.markdown("""
 ### 📢 更新日志
+- V5.3：数据源和 UI 调整
+  - 标题字体缩小（st.title → h3）
+  - JoinQuant 持仓改用 STK_HOLDER_PERCENTAGE（前十大股东，免费版可用），替换不存在的 STK_INST_HOLD
 - V5.2：热点判断和日志修复
   - 热点判断：冷词加入"不属于"（GPT 回答不带"热点"二字时也能正确识别），移除误匹配的"属于当前热点"
   - 日志路径：改用 os.path.abspath(__file__) 绝对路径，解决 Streamlit Cloud 工作目录不一致导致日志文件为空的问题
@@ -1043,25 +1046,24 @@ def get_holding_structure(stock_code):
 
             from jqdatasdk import finance, query
             df = finance.run_query(
-                query(finance.STK_INST_HOLD)
-                .filter(finance.STK_INST_HOLD.code == jq_code)
-                .order_by(finance.STK_INST_HOLD.period.desc())
+                query(finance.STK_HOLDER_PERCENTAGE)
+                .filter(finance.STK_HOLDER_PERCENTAGE.code == jq_code)
+                .order_by(finance.STK_HOLDER_PERCENTAGE.period.desc())
                 .limit(10)
             )
 
             if df is not None and not df.empty:
                 df = df.rename(columns={
-                    "company_name": "机构名称",
-                    "period":       "报告期",
-                    "total_shares": "持股数量",
-                    "proportion":   "持股比例%",
+                    "shareholder_name": "股东名称",
+                    "period":           "报告期",
+                    "holding_amount":   "持股数量",
+                    "holding_ratio":    "持股比例%",
                 })
-                keep = [c for c in ["机构名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
-                return df[keep], "JoinQuant（季报，非实时）"
+                keep = [c for c in ["股东名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
+                return df[keep], "JoinQuant 前十大股东（季报）"
             return None, "⚠️ JoinQuant 暂无该股票持仓数据"
 
         except Exception as e:
-            # 打印完整错误，方便排查
             log_info(f"⚠️ JoinQuant 持仓失败（{e}），切换 Tushare")
     else:
         log_info("⚠️ 未配置 JQ_USERNAME / JQ_PASSWORD，跳过 JoinQuant")
