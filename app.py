@@ -1513,10 +1513,10 @@ J={latest['J']:.2f}
                                   annotation_text="超卖30")
                 fig_rsi.update_layout(
                     title="RSI指标", height=220,
+                    showlegend=False,
                     margin=dict(l=10, r=10, t=40, b=10)
                 )
-                st.plotly_chart(fig_rsi, use_container_width=True,
-                                config={"staticPlot": True})
+                st.plotly_chart(fig_rsi, use_container_width=True)
 
             # ===== 持仓结构饼图 =====
             st.subheader("🗂️ 机构持仓结构")
@@ -1534,8 +1534,8 @@ J={latest['J']:.2f}
                         names=col_name, values=col_val,
                         title="机构持仓结构（前6）"
                     )
-                    st.plotly_chart(fig_pie, use_container_width=True,
-                                    config={"staticPlot": True})
+                    fig_pie.update_layout(showlegend=True)
+                    st.plotly_chart(fig_pie, use_container_width=True)
                 else:
                     st.dataframe(holdings_df, use_container_width=True, hide_index=True)
             else:
