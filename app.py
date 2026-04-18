@@ -16,7 +16,7 @@ logging.basicConfig(
 def translate_error(e):
     msg = str(e)
     if "ERROR" in msg:
-        return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / =被限流"
+        return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / 被限流"
     if "timeout" in msg.lower():
         return "❌ 网络超时：服务器响应过慢"
     if "connection" in msg.lower():
@@ -44,10 +44,19 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V4.7")
+st.caption("版本：V4.8")
 
 st.markdown("""
 ### 📢 更新日志
+- V4.8：稳定性修复
+  - 修复 Tushare top_inst 必填参数 trade_date 报错
+  - 全部替换废弃的 use_container_width → width='stretch'（消除 Streamlit 1.56 警告）
+  - 统一分析页所有标题字体为 18px（对齐股票名称大小）
+  - 交易信号标题改为 22px（比其他标题大一号）
+  - 修复 K线/RSI 显示 1970 年单条竖线（Tushare 日期格式 20260418 在数据获取阶段直接转为 datetime）
+  - RSI 图禁用触屏交互（dragmode=False + displayModeBar=False）
+  - 股票名称缓存修复（单独存 name_xxx.txt，缓存命中时正确显示名称）
+  - 移除 AKShare 失效函数（stock_analyst_rating_em / stock_institute_hold_detail 参数变更）
 - V4.7：触屏与显示修复
   - 修复K线/RSI显示单条竖线的根本原因：Tushare日期格式"20260418"在渲染时未正确解析，现在在数据获取阶段统一转为datetime
   - RSI图加 dragmode=False + displayModeBar=False，彻底禁用触屏交互
