@@ -1,17 +1,13 @@
 import os
-import logging
 from datetime import datetime
 import streamlit as st
 import pandas as pd
 import time
 from openai import OpenAI
 
-logging.basicConfig(
-    filename="run.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    force=True
-)
+# 统一用绝对路径，避免 Streamlit Cloud 工作目录不一致
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOG_FILE = os.path.join(_BASE_DIR, "run.log")
 
 # ===== 错误翻译（英文 → 中文）=====
 def translate_error(e):
@@ -33,10 +29,10 @@ def translate_error(e):
 # ===== 日志辅助函数 =====
 def _write_log(level, msg):
     try:
-        with open("run.log", "a", encoding="utf-8") as f:
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [{level}] {msg}\n")
-    except:
-        pass
+    except Exception as e:
+        print(f"日志写入失败: {e}, 路径: {_LOG_FILE}")
 
 def log_error(msg):
     _write_log("ERROR", msg)
@@ -52,10 +48,14 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V5.1")
+st.caption("版本：V5.2")
 
 st.markdown("""
 ### 📢 更新日志
+- V5.2：热点判断和日志修复
+  - 热点判断：冷词加入"不属于"（GPT 回答不带"热点"二字时也能正确识别），移除误匹配的"属于当前热点"
+  - 日志路径：改用 os.path.abspath(__file__) 绝对路径，解决 Streamlit Cloud 工作目录不一致导致日志文件为空的问题
+  - 日志写入失败时打印路径到 stdout，便于排查
 - V5.1：运行日志可视化
   - 新增侧边栏"运行日志"面板，显示最近50条 log_info/log_error 输出
   - 日志级别从 ERROR 升至 INFO，所有运行记录写入 run.log
@@ -161,12 +161,12 @@ with st.sidebar:
     st.markdown("### 🔍 运行日志")
     st.caption("每次操作后自动更新")
     try:
-        with open("run.log", encoding="utf-8") as f:
+        with open(_LOG_FILE, encoding="utf-8") as f:
             lines = f.readlines()
         recent = "".join(lines[-50:]) if lines else "（暂无记录）"
         st.text_area("最近50条", value=recent, height=400)
     except FileNotFoundError:
-        st.caption("暂无日志（运行一次分析后即可看到）")
+        st.caption(f"暂无日志，路径：{_LOG_FILE}")
 
 # ===== 保存记录 =====
 def save_record(stock_code, price, short_trend, mid_trend, score, advice):
@@ -1463,19 +1463,16 @@ J={latest['J']:.2f}
             elif "不建议" in result:
                 advice = "不建议"
 
-            # ===== 热点识别（匹配明确肯定表述，避免"不属于热点"误判）=====
-            hot_keywords = ["属于当前热点", "属于热点", "热点行业", "热点板块", "是热点"]
-            cold_keywords = ["不属于热点", "非热点", "不是热点", "热度不高", "暂无热点"]
+            # ===== 热点识别 =====
+            # 优先检查否定词（GPT 回答"不属于"时不带"热点"二字）
+            cold_keywords = ["不属于", "非热点", "不是热点", "热度不高", "暂无热点", "不算热点"]
+            hot_keywords  = ["是热点", "热点股", "热点板块", "热点行业", "属于热点行业", "属于热点板块"]
             hot_flag = "❄️ 非热点"
-            for kw in cold_keywords:
-                if kw in result:
-                    hot_flag = "❄️ 非热点"
-                    break
-            else:
-                for kw in hot_keywords:
-                    if kw in result:
-                        hot_flag = "🔥 热点股"
-                        break
+            result_lower = result
+            if any(kw in result_lower for kw in cold_keywords):
+                hot_flag = "❄️ 非热点"
+            elif any(kw in result_lower for kw in hot_keywords):
+                hot_flag = "🔥 热点股"
 
             # ===== 页面输出（V4.7 压缩版）=====
             import plotly.graph_objects as go
