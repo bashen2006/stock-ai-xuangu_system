@@ -26,6 +26,7 @@ jobs:
       - name: 运行脚本
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           python auto_run.py
 
