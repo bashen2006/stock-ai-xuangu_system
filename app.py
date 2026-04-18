@@ -1,10 +1,17 @@
 import os
+import logging
 from datetime import datetime
 import streamlit as st
 import akshare as ak
 import pandas as pd
 import time
 from openai import OpenAI
+
+logging.basicConfig(
+    filename="error.log",
+    level=logging.ERROR,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
@@ -147,7 +154,9 @@ def get_stock_data(stock_code):
 
         return df, stock_name
 
-    except:
+    except Exception as e:
+        logging.error(f"获取股票数据失败 [{stock_code}]: {e}")
+        st.error(f"❌ 数据获取异常：{e}")
         return None, None
 
 # ===== 技术指标 =====
