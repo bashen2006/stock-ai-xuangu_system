@@ -44,10 +44,16 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V4.6")
+st.caption("版本：V4.7")
 
 st.markdown("""
 ### 📢 更新日志
+- V4.7：触屏与显示修复
+  - K线图禁用触屏拖拽/缩放（dragmode=False），解决手机触屏内容乱跑问题
+  - 隐藏 Plotly 工具栏（displayModeBar=False）
+  - 核心评分改为带颜色的紧凑横条（对齐 mockup 样式）
+  - 交易信号"卖出"加注原因（RSI超买+具体数值）
+  - 修复股票名称缓存：名称单独存 name_xxx.txt，缓存命中时正确显示名称而非代码
 - V4.6：UI 压缩重构
   - 标题栏加星级评级（1-5星，自动由综合评分生成）
   - 四维评分条（技术/资金/情绪/多因子）+ progress bar
@@ -176,9 +182,11 @@ def load_cache(stock_code):
         return None
 
 
-def save_cache(stock_code, df):
-    file = f"cache_{stock_code}.csv"
-    df.to_csv(file, index=False)
+def save_cache(stock_code, df, stock_name=None):
+    df.to_csv(f"cache_{stock_code}.csv", index=False)
+    if stock_name and stock_name != stock_code:
+        with open(f"name_{stock_code}.txt", "w", encoding="utf-8") as f:
+            f.write(stock_name)
 
 # ===== TuShare数据获取（Tushare主 + AKShare备）=====
 def get_stock_data(stock_code):
@@ -188,7 +196,13 @@ def get_stock_data(stock_code):
     cache_df = load_cache(stock_code)
     if cache_df is not None:
         log_info(f"✔ 缓存命中：{stock_code}")
-        return cache_df, stock_code
+        cached_name = stock_code
+        try:
+            with open(f"name_{stock_code}.txt", encoding="utf-8") as f:
+                cached_name = f.read().strip() or stock_code
+        except:
+            pass
+        return cache_df, cached_name
 
     # ===== 主接口：Tushare Pro =====
     token = st.secrets.get("TUSHARE_TOKEN")
@@ -263,7 +277,7 @@ def get_stock_data(stock_code):
             log_error(f"❌ AKShare 备用接口也失败：{translate_error(e)}")
             return None, None
 
-    save_cache(stock_code, df)
+    save_cache(stock_code, df, stock_name)
     return df, stock_name
 
 # ===== 技术指标 =====
@@ -695,10 +709,11 @@ def generate_trade_signal(df, score, money_score):
         take_profit = round(price * 1.05, 2)
 
     # =============================
-    # 🔴 卖出（超买）
+    # 🔴 卖出（RSI超买）
     # =============================
     if rsi > 80:
         signal = "卖出"
+        buy_tag = f"RSI超买（{rsi:.0f}）"
 
     return signal, buy_price, stop_loss, take_profit, buy_tag
 
@@ -1436,26 +1451,33 @@ J={latest['J']:.2f}
                 st.caption(f"阶段：{phase}  |  {hot_flag}")
 
             # ===== 四维评分条 =====
-            st.markdown("### 📊 核心评分")
+            st.markdown("#### 📊 核心评分")
             emotion_score = calc_emotion_score(latest['RSI'])
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("技术", f"{base_score}/100")
-            k1.progress(base_score / 100)
-            k2.metric("资金", f"{money_score}/100", money_state)
-            k2.progress(money_score / 100)
-            k3.metric("情绪", f"{emotion_score}/100")
-            k3.progress(emotion_score / 100)
-            k4.metric("多因子", f"{mf_score}/100")
-            k4.progress(mf_score / 100)
 
-            # 评分加成明细
+            dims = [
+                ("技术", base_score,    "#38bdf8"),
+                ("资金", money_score,   "#a78bfa"),
+                ("情绪", emotion_score, "#f59e0b"),
+                ("多因子", mf_score,    "#34d399"),
+            ]
+            for label, val, col in dims:
+                bar_html = (
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+                    f'<span style="color:{col};font-weight:600;font-size:12px;width:40px">{label}</span>'
+                    f'<div style="flex:1;background:#e2e8f0;border-radius:4px;height:8px">'
+                    f'<div style="width:{val}%;height:100%;background:{col};border-radius:4px"></div></div>'
+                    f'<span style="color:#64748b;font-size:12px;width:36px;text-align:right">{val}/100</span>'
+                    f'</div>'
+                )
+                st.markdown(bar_html, unsafe_allow_html=True)
+
             bonus_parts = []
             if ratings_bonus != 0:
                 bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
             if start_bonus != 0:
                 bonus_parts.append(f"启动信号 {start_bonus:+d}")
             st.caption(
-                f"综合评分：{final_score}/100"
+                f"综合评分：{final_score}/100  |  {phase}"
                 + (f"  |  加成：{'，'.join(bonus_parts)}" if bonus_parts else "")
             )
 
@@ -1485,11 +1507,12 @@ J={latest['J']:.2f}
                           for c, o in zip(chart_df["收盘"], chart_df["开盘"])]
             fig.add_trace(go.Bar(
                 x=chart_df["日期"], y=chart_df["成交量"],
-                marker_color=vol_colors, name="成交量"
+                marker_color=vol_colors, name="成交量", showlegend=False
             ), row=2, col=1)
             fig.update_layout(
-                height=500, showlegend=True,
+                height=480, showlegend=True,
                 xaxis_rangeslider_visible=False,
+                dragmode=False,
                 legend=dict(
                     orientation="h", y=1.02,
                     itemclick=False,
@@ -1497,7 +1520,10 @@ J={latest['J']:.2f}
                 ),
                 margin=dict(l=10, r=10, t=40, b=10)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True,
+                            config={"scrollZoom": False,
+                                    "doubleClick": False,
+                                    "displayModeBar": False})
 
             # ===== RSI 曲线 =====
             if "RSI" in chart_df.columns:
