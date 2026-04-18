@@ -13,6 +13,33 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+# ===== 错误翻译（英文 → 中文）=====
+def translate_error(e):
+    msg = str(e)
+    if "ERROR" in msg:
+        return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / 被限流"
+    if "timeout" in msg.lower():
+        return "❌ 网络超时：服务器响应过慢"
+    if "connection" in msg.lower():
+        return "❌ 网络连接失败：请检查网络或服务器状态"
+    if "KeyError" in msg:
+        return "❌ 数据字段缺失：可能接口返回结构变化"
+    if "empty" in msg.lower():
+        return "❌ 数据为空：该股票可能无行情或停牌"
+    if "NoneType" in msg:
+        return "❌ 数据为空（None）：接口未返回有效数据"
+    return f"❌ 未知错误：{msg}"
+
+# ===== 日志辅助函数 =====
+def log_error(msg):
+    logging.error(msg)
+    print(msg)
+    st.error(msg)
+
+def log_info(msg):
+    logging.info(msg)
+    print(msg)
+
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
@@ -109,30 +136,66 @@ def save_cache(stock_code, df):
     file = f"cache_{stock_code}.csv"
     df.to_csv(file, index=False)
 
-# ===== TuShare数据获取（稳定版）=====
+# ===== TuShare数据获取（增强日志版）=====
 def get_stock_data(stock_code):
     import tushare as ts
-    import pandas as pd
-    from datetime import datetime
 
+    # ===== 缓存命中 =====
     cache_df = load_cache(stock_code)
     if cache_df is not None:
+        log_info(f"✔ 缓存命中：{stock_code}")
         return cache_df, "缓存"
 
+    # ===== Token 检查 =====
+    token = st.secrets.get("TUSHARE_TOKEN")
+    if not token:
+        log_error("❌ 未配置 TUSHARE_TOKEN（请在 Streamlit Secrets 中设置）")
+        return None, None
+
+    # ===== Token 初始化 =====
     try:
-        ts.set_token(st.secrets["TUSHARE_TOKEN"])
+        ts.set_token(token)
         pro = ts.pro_api()
+    except Exception as e:
+        log_error(f"❌ Token 初始化失败：{translate_error(e)}")
+        return None, None
 
-        if stock_code.startswith("6"):
-            ts_code = stock_code + ".SH"
-        else:
-            ts_code = stock_code + ".SZ"
+    # ===== 代码转换 =====
+    ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+    log_info(f"📌 请求股票：{ts_code}")
 
+    # ===== 接口调用 =====
+    try:
         df = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
+        time.sleep(0.3)
+    except Exception as e:
+        log_error(f"❌ 接口调用失败：{translate_error(e)}")
+        return None, None
 
-        if df is None or df.empty:
+    # ===== 返回内容检查 =====
+    if df is None:
+        log_error(f"❌ 接口返回空数据（{ts_code}）：可能无行情或权限不足")
+        return None, None
+
+    if isinstance(df, str):
+        log_error(translate_error(df))
+        if "ERROR" in df:
+            st.warning("⚠️ 请检查：①Token是否配置正确  ②Tushare积分是否充足  ③请求是否过于频繁")
+        return None, None
+
+    if df.empty:
+        log_error(f"❌ 数据为空（{ts_code}）：该股票可能停牌或无历史数据")
+        return None, None
+
+    # ===== 字段检查 =====
+    required_cols = ['trade_date', 'open', 'high', 'low', 'close', 'vol']
+    for col in required_cols:
+        if col not in df.columns:
+            log_error(f"❌ 数据字段缺失：{col}（接口返回结构可能已变化）")
             return None, None
 
+    # ===== 数据整理 =====
+    try:
         df = df.rename(columns={
             "trade_date": "日期",
             "open": "开盘",
@@ -141,23 +204,23 @@ def get_stock_data(stock_code):
             "close": "收盘",
             "vol": "成交量"
         })
-
         df = df.sort_values("日期")
-
-        try:
-            basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
-            stock_name = basic.iloc[0]['name']
-        except:
-            stock_name = "未知"
-
-        save_cache(stock_code, df)
-
-        return df, stock_name
-
     except Exception as e:
-        logging.error(f"获取股票数据失败 [{stock_code}]: {e}")
-        st.error(f"❌ 数据获取异常：{e}")
+        log_error(f"❌ 数据处理失败：{translate_error(e)}")
         return None, None
+
+    # ===== 股票名称 =====
+    try:
+        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
+        stock_name = basic.iloc[0]['name']
+    except Exception as e:
+        log_info(f"⚠️ 股票名称获取失败（{ts_code}）：{e}，已用代码代替")
+        stock_name = stock_code
+
+    save_cache(stock_code, df)
+    log_info(f"✅ 数据获取成功：{stock_code}")
+
+    return df, stock_name
 
 # ===== 技术指标 =====
 def calculate_indicators(df):
@@ -300,7 +363,7 @@ def auto_select_stocks(stock_list, mode_type):
             })
 
         except Exception as e:
-            st.write(f"{stock_code} 出错: {e}")
+            log_error(f"❌ 自动选股异常（{stock_code}）：{translate_error(e)}")
 
     df_result = pd.DataFrame(results)
 
@@ -813,7 +876,7 @@ if st.button("开始分析"):
             df, stock_name = get_stock_data(stock_code)
 
             if df is None:
-                st.error("❌ 数据获取失败，请稍后再试")
+                log_error("❌ 数据获取失败，请查看上方具体原因")
                 st.stop()
 
             df = df.tail(100)
