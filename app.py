@@ -42,10 +42,15 @@ def log_info(msg):
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V4.1")
+st.caption("版本：V4.2")
 
 st.markdown("""
 ### 📢 更新日志
+- V4.2：多因子评分融合
+  - 新增 multi_factor_score：五维评分（趋势/资金稳定性/机构模拟/波动率/情绪）
+  - 最终评分 = base_score×0.6 + mf_score×0.4，再经 unified_decision 修正
+  - 修复资金稳定性判断逻辑（移除不可靠的单调递增判断）
+  - mf_score 注入 GPT prompt
 - V4.1：统一决策系统升级
   - 新增 unified_decision：资金阶段作为最高裁判，统一评分
   - generate_trade_signal 升级为三类触发买点（突破/回踩/低吸）
@@ -710,7 +715,72 @@ def unified_decision(df, base_score, money_state, money_score):
 
     return score, phase
 
-# ===== 启动识别增强模块（V3.9）=====
+# ===== 多因子评分系统（V4.2 融合版）=====
+def multi_factor_score(df):
+
+    latest = df.iloc[-1]
+    score = 0
+
+    # =============================
+    # 1️⃣ 技术趋势（20分）
+    # =============================
+    ma5  = latest['MA5']
+    ma10 = latest['MA10']
+    ma20 = latest['MA20']
+
+    if ma5 > ma10 > ma20:
+        score += 20
+    elif ma5 > ma10:
+        score += 10
+
+    # =============================
+    # 2️⃣ 资金稳定性（20分）
+    # 近5日均量 vs 近10日均量
+    # =============================
+    vol5  = df['成交量'].tail(5).mean()
+    vol10 = df['成交量'].tail(10).mean()
+
+    if vol5 > vol10 * 1.1:
+        score += 20
+    elif vol5 > vol10:
+        score += 10
+
+    # =============================
+    # 3️⃣ 机构面模拟：趋势稳定性（20分）
+    # 近10日收盘价标准差 / 均价，越小越稳
+    # =============================
+    close10 = df['收盘'].tail(10)
+    price_cv = close10.std() / close10.mean()  # 变异系数
+
+    if price_cv < 0.02:
+        score += 20
+    elif price_cv < 0.04:
+        score += 10
+
+    # =============================
+    # 4️⃣ 持仓结构模拟：振幅（20分）
+    # 近10日平均日内振幅 / 收盘价
+    # =============================
+    avg_amplitude = (df['最高'] - df['最低']).tail(10).mean()
+    amplitude_ratio = avg_amplitude / latest['收盘']
+
+    if amplitude_ratio < 0.03:
+        score += 20
+    elif amplitude_ratio < 0.06:
+        score += 10
+
+    # =============================
+    # 5️⃣ 情绪（20分）
+    # RSI 在健康区间得满分，过高/过低减分
+    # =============================
+    rsi = latest['RSI']
+
+    if 45 < rsi < 65:
+        score += 20
+    elif 35 < rsi < 75:
+        score += 10
+
+    return score
 def detect_start_signal(df):
 
     latest = df.iloc[-1]
@@ -997,21 +1067,27 @@ if st.button("开始分析"):
                 df, price, low_20, high_20, mode_type
             )
 
-            # ===== 第2步：启动识别（仅用于展示，不再影响评分）=====
+            # ===== 第2步：多因子评分（新增）=====
+            mf_score = multi_factor_score(df)
+
+            # ===== 第3步：融合评分 =====
+            combined_score = int(base_score * 0.6 + mf_score * 0.4)
+
+            # ===== 第4步：启动识别（仅用于展示，不再影响评分）=====
             start_signal, start_level, start_strength = detect_start_signal(df)
 
-            # ===== 第3步：统一决策（资金阶段为主裁判）=====
+            # ===== 第5步：统一决策（资金阶段为主裁判）=====
             final_score, phase = unified_decision(
-                df, base_score, money_state, money_score
+                df, combined_score, money_state, money_score
             )
 
-            # ===== 第4步：生成交易信号 =====
+            # ===== 第6步：生成交易信号 =====
             final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
                 df, final_score, money_score
             )
             trade_logic = explain_trade_logic(final_score, money_score, latest['RSI'])
 
-            # ===== 第5步：移动止损更新 =====
+            # ===== 第7步：移动止损更新 =====
             if stop_loss is not None:
                 stop_loss = update_trailing_stop(stock_code, stop_loss)
 
@@ -1060,7 +1136,9 @@ J={latest['J']:.2f}
 
 ==============================
 【系统评分】
-总评分：{final_score}/100
+基础评分：{base_score}/100
+多因子评分：{mf_score}/100
+融合评分：{final_score}/100
 当前阶段：{phase}
 
 ==============================
@@ -1166,7 +1244,9 @@ J={latest['J']:.2f}
             st.write(f"当前价格：{price}")
             st.write(f"短线趋势：{short_trend}")
             st.write(f"波段趋势：{mid_trend}")
-            st.write(f"总评分：{final_score}/100")
+            st.write(f"基础评分：{base_score}/100")
+            st.write(f"多因子评分：{mf_score}/100")
+            st.write(f"融合评分：{final_score}/100")
             st.write(f"当前阶段：{phase}")
 
             # ⭐ 热点展示
