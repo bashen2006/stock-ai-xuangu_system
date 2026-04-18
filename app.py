@@ -54,9 +54,9 @@ ENABLE_JQDATA_HOLDINGS = False
 st.set_page_config(layout="wide")
 
 st.markdown(
-    '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">'
-    '<span style="font-size:16px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '<span style="font-size:11px;color:#94a3b8">V5.7</span>'
+    '<div style="text-align:center;padding:12px 0 4px">'
+    '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V5.8</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -65,7 +65,8 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
-**V5.7** 热点判断第三次修复：冷词加热点上下文要求（避免"不属于高风险"误触发），热词补充"处于热点/主线热点/符合热点"等 GPT 常用表达<br>
+**V5.8** 热点判断改为专门提取第9项内容判断，不再全文扫描关键词；标题居中加大（22px）<br>
+**V5.7** 热点冷词加热点上下文要求，热词覆盖更多表达<br>
 **V5.6** 数据源终态：禁用 JoinQuant/AKShare 无效调用，标题一行显示，更新日志折叠
 **V5.5** 侧边栏一键检测数据源能力<br>
 **V5.4** 容错：股票代码校验、持仓源优先级调换、JoinQuant 字段校验<br>
@@ -1457,19 +1458,24 @@ J={latest['J']:.2f}
             elif "不建议" in result:
                 advice = "不建议"
 
-            # ===== 热点识别 =====
-            # 冷词：必须带"热点"上下文，避免"不属于高风险"之类误触发
-            cold_keywords = ["不属于热点", "非热点", "不是热点", "热度不高",
-                             "暂无热点", "不算热点", "不属于当前热点", "不属于主流热点"]
-            # 热词：覆盖 GPT 常见正向表达
-            hot_keywords  = ["是热点", "热点股", "热点板块", "热点行业",
-                             "属于热点", "处于热点", "主线热点", "符合热点",
-                             "热点之一", "当前热点", "热门板块", "市场热点"]
+            # ===== 热点识别：只看第9项内容 =====
+            import re as _re
             hot_flag = "❄️ 非热点"
-            if any(kw in result for kw in cold_keywords):
-                hot_flag = "❄️ 非热点"
-            elif any(kw in result for kw in hot_keywords):
-                hot_flag = "🔥 热点股"
+            # 提取第9项到第10项之间的内容
+            section9_match = _re.search(r'【9[\.、．\s].*?】(.*?)(?:【10|$)', result, _re.DOTALL)
+            if section9_match:
+                section9 = section9_match.group(1)
+                # 第9项内容里只要出现"热点"且没有明确否定就判为热点
+                if "热点" in section9 and not any(
+                    kw in section9 for kw in ["不属于", "非热点", "不是热点", "不属热点"]
+                ):
+                    hot_flag = "🔥 热点股"
+            else:
+                # 找不到第9项时降级为全文关键词判断
+                if any(kw in result for kw in ["不属于热点", "非热点", "不是热点"]):
+                    hot_flag = "❄️ 非热点"
+                elif any(kw in result for kw in ["处于热点", "主线热点", "属于热点", "热点行业"]):
+                    hot_flag = "🔥 热点股"
 
             # ===== 页面输出（V4.7 压缩版）=====
             import plotly.graph_objects as go
