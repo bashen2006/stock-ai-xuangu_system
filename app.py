@@ -16,7 +16,7 @@ logging.basicConfig(
 def translate_error(e):
     msg = str(e)
     if "ERROR" in msg:
-        return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / 被限流"
+        return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / =被限流"
     if "timeout" in msg.lower():
         return "❌ 网络超时：服务器响应过慢"
     if "connection" in msg.lower():
@@ -1038,7 +1038,8 @@ def get_holding_structure(stock_code):
             ts.set_token(token)
             pro = ts.pro_api()
             ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
-            df = pro.top_inst(ts_code=ts_code)
+            trade_date = datetime.now().strftime("%Y%m%d")
+            df = pro.top_inst(ts_code=ts_code, trade_date=trade_date)
             if df is not None and not df.empty:
                 return df.head(10), "Tushare"
         except Exception as e:
@@ -1528,7 +1529,7 @@ J={latest['J']:.2f}
                 ),
                 margin=dict(l=10, r=10, t=40, b=10)
             )
-            st.plotly_chart(fig, use_container_width=True,
+            st.plotly_chart(fig, width='stretch',
                             config={"scrollZoom": False,
                                     "doubleClick": False,
                                     "displayModeBar": False})
@@ -1551,13 +1552,13 @@ J={latest['J']:.2f}
                     dragmode=False,
                     margin=dict(l=10, r=10, t=40, b=10)
                 )
-                st.plotly_chart(fig_rsi, use_container_width=True,
+                st.plotly_chart(fig_rsi, width='stretch',
                                 config={"scrollZoom": False,
                                         "doubleClick": False,
                                         "displayModeBar": False})
 
             # ===== 持仓结构饼图 =====
-            st.subheader("🗂️ 机构持仓结构")
+            st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
             if holdings_df is not None:
                 st.caption(f"数据来源：{holdings_src}")
                 col_name = next(
@@ -1573,14 +1574,14 @@ J={latest['J']:.2f}
                         title="机构持仓结构（前6）"
                     )
                     fig_pie.update_layout(showlegend=True)
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.plotly_chart(fig_pie, width='stretch')
                 else:
-                    st.dataframe(holdings_df, use_container_width=True, hide_index=True)
+                    st.dataframe(holdings_df, width='stretch', hide_index=True)
             else:
                 st.warning(holdings_src)
 
             # ===== 机构评级（压缩统计）=====
-            st.subheader("🏦 机构评级")
+            st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
             if ratings_df is not None and not ratings_df.empty:
                 st.caption(f"数据来源：{ratings_src}")
                 rating_col = next(
@@ -1594,15 +1595,16 @@ J={latest['J']:.2f}
                     r1.metric("🟢 买入/增持", buy_cnt)
                     r2.metric("🟡 中性/持有", hold_cnt)
                     r3.metric("🔴 卖出/减持", sell_cnt)
-                st.dataframe(ratings_df, use_container_width=True, hide_index=True)
+                st.dataframe(ratings_df, width='stretch', hide_index=True)
             else:
                 st.warning(ratings_src)
 
             # ===== 交易信号（高亮）=====
             signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
             st.markdown(
-                f"## 🎯 交易信号：<span style='color:{signal_color}'>"
-                f"{final_signal}{'（' + buy_tag + '）' if buy_tag else ''}</span>",
+                f'<div style="font-size:22px;font-weight:700;margin:16px 0 8px">'
+                f'🎯 交易信号：<span style="color:{signal_color}">'
+                f'{final_signal}{"（" + buy_tag + "）" if buy_tag else ""}</span></div>',
                 unsafe_allow_html=True
             )
             sc1, sc2, sc3 = st.columns(3)
@@ -1616,17 +1618,17 @@ J={latest['J']:.2f}
             # ===== 三栏辅助信息 =====
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.subheader("📊 技术面")
+                st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📊 技术面</div>', unsafe_allow_html=True)
                 st.write(f"短线趋势：{short_trend}")
                 st.write(f"波段趋势：{mid_trend}")
                 st.write(f"启动信号：{start_signal}（{start_level}，强度 {start_strength}/100）")
             with col2:
-                st.subheader("💰 资金面")
+                st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">💰 资金面</div>', unsafe_allow_html=True)
                 st.write(f"主力状态：{money_state}")
                 st.write(f"资金强度：{money_score}/100")
                 st.info(money_explain)
             with col3:
-                st.subheader("📌 评分说明")
+                st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📌 评分说明</div>', unsafe_allow_html=True)
                 st.write(f"基础技术：{base_score}/100")
                 st.write(f"多因子：{mf_score}/100")
                 st.write(f"机构加成：{ratings_bonus:+d}")
@@ -1634,7 +1636,7 @@ J={latest['J']:.2f}
                 st.write(f"最终：{final_score}/100")
 
             # ===== AI分析报告 =====
-            st.subheader("📊 AI分析报告")
+            st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">📊 AI分析报告</div>', unsafe_allow_html=True)
             st.write(result)
 
             # ===== 保存记录 =====
