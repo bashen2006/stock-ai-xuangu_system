@@ -49,11 +49,11 @@ st.caption("版本：V4.7")
 st.markdown("""
 ### 📢 更新日志
 - V4.7：触屏与显示修复
-  - K线图禁用触屏拖拽/缩放（dragmode=False），解决手机触屏内容乱跑问题
-  - 隐藏 Plotly 工具栏（displayModeBar=False）
-  - 核心评分改为带颜色的紧凑横条（对齐 mockup 样式）
-  - 交易信号"卖出"加注原因（RSI超买+具体数值）
-  - 修复股票名称缓存：名称单独存 name_xxx.txt，缓存命中时正确显示名称而非代码
+  - 修复K线/RSI显示单条竖线的根本原因：Tushare日期格式"20260418"在渲染时未正确解析，现在在数据获取阶段统一转为datetime
+  - RSI图加 dragmode=False + displayModeBar=False，彻底禁用触屏交互
+  - 统一全页 UI 文字大小（标题18px，副标题14px，说明12px）
+  - 交易信号卖出加注RSI具体数值原因
+  - 修复股票名称缓存（名称单独存 name_xxx.txt）
 - V4.6：UI 压缩重构
   - 标题栏加星级评级（1-5星，自动由综合评分生成）
   - 四维评分条（技术/资金/情绪/多因子）+ progress bar
@@ -235,7 +235,10 @@ def get_stock_data(stock_code):
                         "high": "最高", "low": "最低",
                         "close": "收盘", "vol": "成交量"
                     })
-                    df = df.sort_values("日期")
+                    # trade_date 是 "20260418" 格式，强制转为日期
+                    df["日期"] = pd.to_datetime(df["日期"], format="%Y%m%d", errors="coerce")
+                    df = df.dropna(subset=["日期"])
+                    df = df.sort_values("日期").reset_index(drop=True)
                     try:
                         basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
                         stock_name = basic.iloc[0]['name']
@@ -270,7 +273,9 @@ def get_stock_data(stock_code):
                 return None, None
 
             df = raw[list(col_map.keys())].copy()
-            df = df.sort_values("日期")
+            df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
+            df = df.dropna(subset=["日期"])
+            df = df.sort_values("日期").reset_index(drop=True)
             log_info(f"✅ AKShare 备用获取成功：{stock_code}")
 
         except Exception as e:
@@ -998,9 +1003,48 @@ def get_institution_ratings(stock_code):
 
 # ===== 持仓结构（Tushare主 + AKShare备，季度级）=====
 def get_holding_structure(stock_code):
-    token = st.secrets.get("TUSHARE_TOKEN")
 
-    # ── 主：Tushare top_inst（需较高积分）──
+    # JoinQuant 股票代码格式
+    jq_code = stock_code + ".XSHG" if stock_code.startswith("6") else stock_code + ".XSHE"
+
+    # ── 主：JoinQuant（免费，季度数据）──
+    jq_user = st.secrets.get("JQ_USERNAME")
+    jq_pass = st.secrets.get("JQ_PASSWORD")
+
+    if jq_user and jq_pass:
+        try:
+            import jqdatasdk as jq
+            jq.auth(jq_user, jq_pass)
+
+            from jqdatasdk import finance, query
+            df = finance.run_query(
+                query(finance.STK_INST_HOLD)
+                .filter(finance.STK_INST_HOLD.code == jq_code)
+                .order_by(finance.STK_INST_HOLD.period.desc())
+                .limit(10)
+            )
+
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    "company_name": "机构名称",
+                    "period":       "报告期",
+                    "total_shares": "持股数量",
+                    "proportion":   "持股比例%",
+                })
+                keep = [c for c in ["机构名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
+                label = f"JoinQuant（季报，非实时）"
+                return df[keep], label
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ["账号", "密码", "auth", "login", "用户"]):
+                log_info("⚠️ JoinQuant 账号认证失败，切换 Tushare")
+            else:
+                log_info(f"⚠️ JoinQuant 持仓异常（{e}），切换 Tushare")
+    else:
+        log_info("⚠️ 未配置 JQ_USERNAME / JQ_PASSWORD，跳过 JoinQuant")
+
+    # ── 次：Tushare top_inst（需较高积分）──
+    token = st.secrets.get("TUSHARE_TOKEN")
     if token:
         try:
             import tushare as ts
@@ -1017,13 +1061,11 @@ def get_holding_structure(stock_code):
             else:
                 log_info(f"⚠️ Tushare 持仓异常（{e}），切换 AKShare")
 
-    # ── 备：AKShare 机构持仓（免费，季度更新）──
+    # ── 末：AKShare（免费，季度更新）──
     try:
         import akshare as ak
-        # 推算最近已披露的季度
         now = datetime.now()
-        m = now.month
-        y = now.year
+        m, y = now.month, now.year
         if m <= 3:
             quarter = f"{y-1}1231"
         elif m <= 6:
@@ -1040,7 +1082,7 @@ def get_holding_structure(stock_code):
     except Exception as e:
         return None, f"❌ 持仓结构获取失败：{translate_error(e)}"
 
-    return None, "❌ 暂无持仓数据"
+    return None, "❌ 暂无持仓数据（JQ/Tushare/AKShare 均不可用）"
 
 
 # ===== 星级评级 =====
@@ -1424,7 +1466,7 @@ J={latest['J']:.2f}
             else:
                 hot_flag = "❄️ 非热点"
 
-            # ===== 页面输出（V4.6 压缩版）=====
+            # ===== 页面输出（V4.7 压缩版）=====
             import plotly.graph_objects as go
             import plotly.express as px
             import plotly.subplots as sp
@@ -1438,35 +1480,33 @@ J={latest['J']:.2f}
             chg_color = "red" if chg >= 0 else "green"
             stars = score_to_stars(final_score)
 
-            c1, c2, c3 = st.columns([3, 2, 2])
-            with c1:
-                st.markdown(f"### 📊 {stock_name}（{stock_code}）")
-                st.markdown(f"{stars}")
-            with c2:
-                st.markdown(
-                    f"### {price:.2f} &nbsp;<span style='color:{chg_color}'>{chg_str}</span>",
-                    unsafe_allow_html=True
-                )
-            with c3:
-                st.caption(f"阶段：{phase}  |  {hot_flag}")
+            st.markdown(
+                f'<div style="margin-bottom:4px">'
+                f'<span style="font-size:18px;font-weight:700">{stock_name}（{stock_code}）</span>'
+                f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{chg_color}">{price:.2f} {chg_str}</span>'
+                f'</div>'
+                f'<div style="font-size:20px;margin-bottom:2px">{stars}</div>'
+                f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">阶段：{phase}&nbsp;|&nbsp;{hot_flag}</div>',
+                unsafe_allow_html=True
+            )
 
             # ===== 四维评分条 =====
-            st.markdown("#### 📊 核心评分")
+            st.markdown('<div style="font-size:14px;font-weight:600;margin-bottom:8px">📊 核心评分</div>', unsafe_allow_html=True)
             emotion_score = calc_emotion_score(latest['RSI'])
 
             dims = [
-                ("技术", base_score,    "#38bdf8"),
-                ("资金", money_score,   "#a78bfa"),
-                ("情绪", emotion_score, "#f59e0b"),
-                ("多因子", mf_score,    "#34d399"),
+                ("技术",  base_score,    "#38bdf8"),
+                ("资金",  money_score,   "#a78bfa"),
+                ("情绪",  emotion_score, "#f59e0b"),
+                ("多因子", mf_score,     "#34d399"),
             ]
             for label, val, col in dims:
                 bar_html = (
-                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-                    f'<span style="color:{col};font-weight:600;font-size:12px;width:40px">{label}</span>'
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">'
+                    f'<span style="color:{col};font-weight:600;font-size:13px;min-width:44px">{label}</span>'
                     f'<div style="flex:1;background:#e2e8f0;border-radius:4px;height:8px">'
                     f'<div style="width:{val}%;height:100%;background:{col};border-radius:4px"></div></div>'
-                    f'<span style="color:#64748b;font-size:12px;width:36px;text-align:right">{val}/100</span>'
+                    f'<span style="color:#64748b;font-size:12px;min-width:44px;text-align:right">{val}/100</span>'
                     f'</div>'
                 )
                 st.markdown(bar_html, unsafe_allow_html=True)
@@ -1476,14 +1516,16 @@ J={latest['J']:.2f}
                 bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
             if start_bonus != 0:
                 bonus_parts.append(f"启动信号 {start_bonus:+d}")
-            st.caption(
-                f"综合评分：{final_score}/100  |  {phase}"
-                + (f"  |  加成：{'，'.join(bonus_parts)}" if bonus_parts else "")
+            st.markdown(
+                f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">'
+                f'综合评分：{final_score}/100'
+                + (f'&nbsp;|&nbsp;加成：{"，".join(bonus_parts)}' if bonus_parts else '')
+                + '</div>',
+                unsafe_allow_html=True
             )
 
             # ===== K线 + 成交量（合并子图）=====
             chart_df = df.copy()
-            chart_df["日期"] = pd.to_datetime(chart_df["日期"])
 
             fig = sp.make_subplots(
                 rows=2, cols=1,
@@ -1540,9 +1582,13 @@ J={latest['J']:.2f}
                 fig_rsi.update_layout(
                     title="RSI指标", height=220,
                     showlegend=False,
+                    dragmode=False,
                     margin=dict(l=10, r=10, t=40, b=10)
                 )
-                st.plotly_chart(fig_rsi, use_container_width=True)
+                st.plotly_chart(fig_rsi, use_container_width=True,
+                                config={"scrollZoom": False,
+                                        "doubleClick": False,
+                                        "displayModeBar": False})
 
             # ===== 持仓结构饼图 =====
             st.subheader("🗂️ 机构持仓结构")
