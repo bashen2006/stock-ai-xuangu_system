@@ -2,7 +2,6 @@ import os
 import logging
 from datetime import datetime
 import streamlit as st
-import akshare as ak
 import pandas as pd
 import time
 from openai import OpenAI
@@ -43,10 +42,22 @@ def log_info(msg):
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V3.9")
+st.caption("版本：V4.1")
 
 st.markdown("""
 ### 📢 更新日志
+- V4.1：统一决策系统升级
+  - 新增 unified_decision：资金阶段作为最高裁判，统一评分
+  - generate_trade_signal 升级为三类触发买点（突破/回踩/低吸）
+  - 移除 apply_start_bonus 二次加分，消除与资金行为的重复计分
+  - GPT prompt 第7条改为"解释系统信号"，禁止独立推翻系统结论
+- V4.0：架构稳定性升级
+  - 数据缓存改为30分钟，选股每次实时重算
+  - 修复股票名称缓存显示为"缓存"的bug
+  - 全面迁移 Tushare Pro，移除 AKShare 依赖
+  - 新增中文错误提示系统 + 完整日志
+  - 执行控制：运行锁防重复点击，stock_pool 会话级缓存
+  - 股票池扩容至500支，选股分析上限100支
 - V3.9:启动识别增强模块
 - V3.5：加入资金行为分析
 - V3.3：双模式
@@ -122,8 +133,8 @@ def load_cache(stock_code):
         # 计算时间差（秒）
         diff_seconds = (now - file_time).total_seconds()
 
-        # ✅ 超过1小时（3600秒）就失效
-        if diff_seconds > 3600:
+        # ✅ 超过30分钟（1800秒）就失效
+        if diff_seconds > 1800:
             return None
 
         return df
@@ -136,7 +147,7 @@ def save_cache(stock_code, df):
     file = f"cache_{stock_code}.csv"
     df.to_csv(file, index=False)
 
-# ===== TuShare数据获取（增强日志版）=====
+# ===== TuShare数据获取（Tushare主 + AKShare备）=====
 def get_stock_data(stock_code):
     import tushare as ts
 
@@ -144,82 +155,82 @@ def get_stock_data(stock_code):
     cache_df = load_cache(stock_code)
     if cache_df is not None:
         log_info(f"✔ 缓存命中：{stock_code}")
-        return cache_df, "缓存"
+        return cache_df, stock_code
 
-    # ===== Token 检查 =====
+    # ===== 主接口：Tushare Pro =====
     token = st.secrets.get("TUSHARE_TOKEN")
+    df = None
+    stock_name = stock_code
+
     if not token:
-        log_error("❌ 未配置 TUSHARE_TOKEN（请在 Streamlit Secrets 中设置）")
-        return None, None
+        log_info("⚠️ 未配置 TUSHARE_TOKEN，直接走备用接口")
+    else:
+        try:
+            ts.set_token(token)
+            pro = ts.pro_api()
+            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+            log_info(f"📌 Tushare 请求：{ts_code}")
 
-    # ===== Token 初始化 =====
-    try:
-        ts.set_token(token)
-        pro = ts.pro_api()
-    except Exception as e:
-        log_error(f"❌ Token 初始化失败：{translate_error(e)}")
-        return None, None
+            df = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
+            time.sleep(0.3)
 
-    # ===== 代码转换 =====
-    ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
-    log_info(f"📌 请求股票：{ts_code}")
+            if isinstance(df, str) or df is None or df.empty:
+                log_info(f"⚠️ Tushare 无数据（{ts_code}），切换备用接口")
+                df = None
+            else:
+                required_cols = ['trade_date', 'open', 'high', 'low', 'close', 'vol']
+                if not all(c in df.columns for c in required_cols):
+                    log_info("⚠️ Tushare 字段异常，切换备用接口")
+                    df = None
+                else:
+                    df = df.rename(columns={
+                        "trade_date": "日期", "open": "开盘",
+                        "high": "最高", "low": "最低",
+                        "close": "收盘", "vol": "成交量"
+                    })
+                    df = df.sort_values("日期")
+                    try:
+                        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
+                        stock_name = basic.iloc[0]['name']
+                    except:
+                        stock_name = stock_code
+                    log_info(f"✅ Tushare 获取成功：{stock_code}")
 
-    # ===== 接口调用 =====
-    try:
-        df = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
-        time.sleep(0.3)
-    except Exception as e:
-        log_error(f"❌ 接口调用失败：{translate_error(e)}")
-        return None, None
+        except Exception as e:
+            log_info(f"⚠️ Tushare 异常（{translate_error(e)}），切换备用接口")
+            df = None
 
-    # ===== 返回内容检查 =====
+    # ===== 备用接口：AKShare =====
     if df is None:
-        log_error(f"❌ 接口返回空数据（{ts_code}）：可能无行情或权限不足")
-        return None, None
+        try:
+            import akshare as ak
+            log_info(f"📌 AKShare 备用请求：{stock_code}")
+            raw = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq")
+            time.sleep(0.5)
 
-    if isinstance(df, str):
-        log_error(translate_error(df))
-        if "ERROR" in df:
-            st.warning("⚠️ 请检查：①Token是否配置正确  ②Tushare积分是否充足  ③请求是否过于频繁")
-        return None, None
+            if raw is None or raw.empty:
+                log_error(f"❌ AKShare 也无数据（{stock_code}）：可能停牌或代码有误")
+                return None, None
 
-    if df.empty:
-        log_error(f"❌ 数据为空（{ts_code}）：该股票可能停牌或无历史数据")
-        return None, None
+            # AKShare 列名映射
+            col_map = {
+                "日期": "日期", "开盘": "开盘", "最高": "最高",
+                "最低": "最低", "收盘": "收盘", "成交量": "成交量"
+            }
+            missing = [c for c in col_map if c not in raw.columns]
+            if missing:
+                log_error(f"❌ AKShare 字段缺失：{missing}")
+                return None, None
 
-    # ===== 字段检查 =====
-    required_cols = ['trade_date', 'open', 'high', 'low', 'close', 'vol']
-    for col in required_cols:
-        if col not in df.columns:
-            log_error(f"❌ 数据字段缺失：{col}（接口返回结构可能已变化）")
+            df = raw[list(col_map.keys())].copy()
+            df = df.sort_values("日期")
+            log_info(f"✅ AKShare 备用获取成功：{stock_code}")
+
+        except Exception as e:
+            log_error(f"❌ AKShare 备用接口也失败：{translate_error(e)}")
             return None, None
 
-    # ===== 数据整理 =====
-    try:
-        df = df.rename(columns={
-            "trade_date": "日期",
-            "open": "开盘",
-            "high": "最高",
-            "low": "最低",
-            "close": "收盘",
-            "vol": "成交量"
-        })
-        df = df.sort_values("日期")
-    except Exception as e:
-        log_error(f"❌ 数据处理失败：{translate_error(e)}")
-        return None, None
-
-    # ===== 股票名称 =====
-    try:
-        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
-        stock_name = basic.iloc[0]['name']
-    except Exception as e:
-        log_info(f"⚠️ 股票名称获取失败（{ts_code}）：{e}，已用代码代替")
-        stock_name = stock_code
-
     save_cache(stock_code, df)
-    log_info(f"✅ 数据获取成功：{stock_code}")
-
     return df, stock_name
 
 # ===== 技术指标 =====
@@ -325,8 +336,15 @@ def auto_select_stocks(stock_list, mode_type):
 
     stock_list = stock_list[:100]
 
+    last_call_time = 0
+
     for stock_code in stock_list:
         try:
+            now = time.time()
+            wait = 0.5 - (now - last_call_time)
+            if wait > 0:
+                time.sleep(wait)
+            last_call_time = time.time()
             df, stock_name = get_stock_data(stock_code)
 
             if df is None or df.empty:
@@ -577,7 +595,7 @@ def explain_money_flow(state, score):
     else:
         return "暂无明显资金行为，建议观望。"
 
-# ===== 交易信号模块（专业版：买 + 卖分离）=====
+# ===== 交易信号模块（V4.1：三类触发买点）=====
 def generate_trade_signal(df, score, money_score):
 
     latest = df.iloc[-1]
@@ -590,47 +608,107 @@ def generate_trade_signal(df, score, money_score):
     high_20 = df['最高'].tail(20).max()
     low_20 = df['最低'].tail(20).min()
 
-    # =============================
-    # 🟢 买入判断（Entry）
-    # =============================
-    can_buy = False
+    vol = latest['成交量']
+    vol_ma5 = df['成交量'].rolling(5).mean().iloc[-1]
 
-    if score >= 60 and money_score >= 40 and price > ma5:
-        can_buy = True
-
-    # =============================
-    # 🔴 卖出判断（Exit）
-    # =============================
-    sell_signal = None
-
-    if rsi > 80:
-        sell_signal = "超买减仓"
-
-    elif price >= high_20 * 0.98:
-        sell_signal = "接近压力位，建议减仓"
-
-    elif price < ma10:
-        sell_signal = "跌破MA10，建议止损"
-
-    # =============================
-    # 🎯 最终决策
-    # =============================
-    final_signal = "观望"
+    signal = "观望"
     buy_price = None
     stop_loss = None
     take_profit = None
+    buy_tag = ""
 
-    if can_buy and sell_signal is None:
-        final_signal = "买入"
+    # =============================
+    # 🟢 1️⃣ 突破买点（优先级最高）
+    # =============================
+    if (
+        score >= 70 and
+        price >= high_20 * 0.97 and
+        vol > vol_ma5 * 1.2 and
+        rsi < 75
+    ):
+        signal = "买入"
+        buy_tag = "突破买点"
+        buy_price = round(high_20 * 1.01, 2)   # 突破确认后买
+        stop_loss = round(ma10, 2)
+        take_profit = round(price * 1.08, 2)
 
+    # =============================
+    # 🟡 2️⃣ 回踩买点（最稳）
+    # =============================
+    elif (
+        score >= 60 and
+        ma5 > ma10 and
+        price <= ma10 * 1.02 and
+        rsi < 65
+    ):
+        signal = "买入"
+        buy_tag = "回踩买点"
         buy_price = round(price, 2)
-        stop_loss = round(min(low_20, ma10), 2)
-        take_profit = round(high_20 * 1.05, 2)
+        stop_loss = round(ma10 * 0.97, 2)
+        take_profit = round(price * 1.06, 2)
 
-    elif sell_signal is not None:
-        final_signal = "卖出"
+    # =============================
+    # 🔵 3️⃣ 低吸买点（谨慎）
+    # =============================
+    elif (
+        score >= 55 and
+        price <= low_20 * 1.05 and
+        rsi < 40
+    ):
+        signal = "买入"
+        buy_tag = "低吸买点"
+        buy_price = round(price, 2)
+        stop_loss = round(low_20 * 0.97, 2)
+        take_profit = round(price * 1.05, 2)
 
-    return final_signal, buy_price, stop_loss, take_profit, sell_signal
+    # =============================
+    # 🔴 卖出（超买）
+    # =============================
+    if rsi > 80:
+        signal = "卖出"
+
+    return signal, buy_price, stop_loss, take_profit, buy_tag
+
+# ===== 统一决策系统（V4.1 核心）=====
+def unified_decision(df, base_score, money_state, money_score):
+
+    score = base_score
+
+    # =============================
+    # 第一层：资金阶段（最高优先级）
+    # =============================
+    if money_state == "主力拉升":
+        score += 20
+    elif money_state == "试盘":
+        score += 10
+    elif money_state == "吸筹中":
+        score += 5
+    elif money_state == "主力出货":
+        score -= 40
+
+    # =============================
+    # 第二层：资金强度修正
+    # =============================
+    if money_score >= 60:
+        score += 10
+    elif money_score <= 20:
+        score -= 10
+
+    score = max(0, min(100, score))
+
+    # =============================
+    # 阶段标签（用于 UI 和 GPT）
+    # =============================
+    if score >= 75:
+        phase = "主升阶段"
+    elif score >= 60:
+        phase = "启动阶段"
+    elif score >= 45:
+        phase = "震荡阶段"
+    else:
+        phase = "弱势阶段"
+
+    return score, phase
 
 # ===== 启动识别增强模块（V3.9）=====
 def detect_start_signal(df):
@@ -866,17 +944,34 @@ mode = st.selectbox(
 )
 mode_type = "trend" if "趋势" in mode else "dip"
 
+# ===== 执行控制状态初始化 =====
+if "analyze_running" not in st.session_state:
+    st.session_state.analyze_running = False
+
+if "select_running" not in st.session_state:
+    st.session_state.select_running = False
+
+if "stock_pool" not in st.session_state:
+    st.session_state.stock_pool = None
+
 # ===== 主分析 =====
 if st.button("开始分析"):
 
-    if stock_code:
-        st.write("🔍 分析中，请稍等...")
+    if st.session_state.analyze_running:
+        st.warning("⚠️ 正在分析中，请稍候")
+        st.stop()
 
-        try:
+    st.session_state.analyze_running = True
+
+    try:
+        if stock_code:
+            st.write("🔍 分析中，请稍等...")
+
             df, stock_name = get_stock_data(stock_code)
 
             if df is None:
                 log_error("❌ 数据获取失败，请查看上方具体原因")
+                st.session_state.analyze_running = False
                 st.stop()
 
             df = df.tail(100)
@@ -897,22 +992,26 @@ if st.button("开始分析"):
 
             short_trend, mid_trend = get_trend(df)
 
-            # ✅ 第1步：先算出 score
-            score, _, _, _, _ = calculate_score_v2(
+            # ===== 第1步：基础评分 =====
+            base_score, _, _, _, _ = calculate_score_v2(
                 df, price, low_20, high_20, mode_type
             )
 
-            # ✅ 第2步：再做启动识别 + 修正 score
+            # ===== 第2步：启动识别（仅用于展示，不再影响评分）=====
             start_signal, start_level, start_strength = detect_start_signal(df)
-            score = apply_start_bonus(score, start_level, start_signal)
 
-            # ✅ 第3步：用修正后的 score 生成交易信号，得到 stop_loss
-            final_signal, buy_price, stop_loss, take_profit, sell_signal = generate_trade_signal(
-                df, score, money_score
+            # ===== 第3步：统一决策（资金阶段为主裁判）=====
+            final_score, phase = unified_decision(
+                df, base_score, money_state, money_score
             )
-            trade_logic = explain_trade_logic(score, money_score, latest['RSI'])
 
-            # ✅ 第4步：stop_loss 有值后才能做移动止损更新
+            # ===== 第4步：生成交易信号 =====
+            final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
+                df, final_score, money_score
+            )
+            trade_logic = explain_trade_logic(final_score, money_score, latest['RSI'])
+
+            # ===== 第5步：移动止损更新 =====
             if stop_loss is not None:
                 stop_loss = update_trailing_stop(stock_code, stop_loss)
 
@@ -961,7 +1060,8 @@ J={latest['J']:.2f}
 
 ==============================
 【系统评分】
-总评分：{score}/100
+总评分：{final_score}/100
+当前阶段：{phase}
 
 ==============================
 【资金行为（核心）】
@@ -993,8 +1093,10 @@ J={latest['J']:.2f}
 说明当前是：吸筹 / 试盘 / 拉升 / 出货
 并判断资金是增强还是减弱
 
-【7. 交易建议（必须明确）】
-（买入 / 观望 / 减仓 / 卖出）
+【7. 系统交易决策说明】
+当前系统信号：{final_signal}（{buy_tag if buy_tag else "无买点标签"}）
+当前阶段：{phase}
+请解释这个信号是否合理，并给出补充说明。不得推翻系统结论。
 
 【8. 具体操作策略（必须给价格）】
 - 建议买点：
@@ -1064,7 +1166,8 @@ J={latest['J']:.2f}
             st.write(f"当前价格：{price}")
             st.write(f"短线趋势：{short_trend}")
             st.write(f"波段趋势：{mid_trend}")
-            st.write(f"总评分：{score}/100")
+            st.write(f"总评分：{final_score}/100")
+            st.write(f"当前阶段：{phase}")
 
             # ⭐ 热点展示
             st.write(f"市场定位：{hot_flag}")
@@ -1073,26 +1176,48 @@ J={latest['J']:.2f}
             st.write(result)
 
             # ===== 保存记录 =====
-            save_record(stock_code, price, short_trend, mid_trend, score, advice)
+            save_record(stock_code, price, short_trend, mid_trend, final_score, advice)
 
-        except Exception as e:
-            st.error(f"❌ 出错：{e}")
+    except Exception as e:
+        st.error(f"❌ 出错：{e}")
+
+    finally:
+        st.session_state.analyze_running = False
 
 
 # ===== 按钮 =====
 if st.button("开始自动选股"):
 
-    stock_list = get_stock_pool()
-
-    if stock_list is None:
-        st.error("❌ 股票池获取失败")
+    if st.session_state.select_running:
+        st.warning("⚠️ 正在运行，请勿重复点击")
         st.stop()
 
-    df_select = auto_select_stocks(stock_list, mode_type)
-    if df_select is not None:
-        st.dataframe(df_select)
-    else:
-        st.write("暂无结果")
+    st.session_state.select_running = True
+
+    try:
+        if st.session_state.get("stock_pool") is None:
+            st.session_state.stock_pool = get_stock_pool()
+
+        stock_list = st.session_state.stock_pool
+
+        if stock_list is None:
+            st.error("❌ 股票池获取失败")
+            st.session_state.select_running = False
+            st.stop()
+
+        st.write("🔍 选股中，请稍等...")
+        df_select = auto_select_stocks(stock_list, mode_type)
+
+        if df_select is not None:
+            st.dataframe(df_select)
+        else:
+            st.write("暂无结果")
+
+    except Exception as e:
+        log_error(f"❌ 自动选股异常：{translate_error(e)}")
+
+    finally:
+        st.session_state.select_running = False
 
 # ===== 复盘按钮（修复版）=====
 st.subheader("📊 历史预测复盘")
