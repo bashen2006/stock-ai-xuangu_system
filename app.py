@@ -48,10 +48,15 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 st.set_page_config(layout="wide")
 
 st.markdown("### 📊 AI股票分析系统（专业版）")
-st.caption("版本：V5.3")
+st.caption("版本：V5.4")
 
 st.markdown("""
 ### 📢 更新日志
+- V5.4：容错机制完善
+  - 持仓数据源调换优先级：Tushare 主，JoinQuant 降为补充（JoinQuant 免费版不稳定）
+  - JoinQuant 字段校验：rename 前检查字段是否存在，缺失时显示原始数据而不是崩溃
+  - 股票代码合法性校验：非6位纯数字直接提示错误，不走接口
+  - 持仓/评级失败统一用 log_info（预期降级行为，不是错误）
 - V5.3：数据源和 UI 调整
   - 标题字体缩小（st.title → h3）
   - JoinQuant 持仓改用 STK_HOLDER_PERCENTAGE（前十大股东，免费版可用），替换不存在的 STK_INST_HOLD
@@ -1035,7 +1040,26 @@ def get_holding_structure(stock_code):
 
     jq_code = stock_code + ".XSHG" if stock_code.startswith("6") else stock_code + ".XSHE"
 
-    # ── 主：JoinQuant（免费，季度数据）──
+    # ── 主：Tushare top_inst（积分足时优先）──
+    token = st.secrets.get("TUSHARE_TOKEN")
+    if token:
+        try:
+            import tushare as ts
+            ts.set_token(token)
+            pro = ts.pro_api()
+            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+            trade_date = datetime.now().strftime("%Y%m%d")
+            df = pro.top_inst(ts_code=ts_code, trade_date=trade_date)
+            if df is not None and not df.empty:
+                return df.head(10), "Tushare"
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
+                log_info("⚠️ Tushare 持仓积分不足，切换 JoinQuant")
+            else:
+                log_info(f"⚠️ Tushare 持仓失败（{e}），切换 JoinQuant")
+
+    # ── 补充：JoinQuant 前十大股东（免费，季度）──
     jq_user = st.secrets.get("JQ_USERNAME")
     jq_pass = st.secrets.get("JQ_PASSWORD")
 
@@ -1053,6 +1077,12 @@ def get_holding_structure(stock_code):
             )
 
             if df is not None and not df.empty:
+                # 字段校验：不同版本字段名可能不同
+                expected = {"shareholder_name", "period", "holding_amount", "holding_ratio"}
+                missing = expected - set(df.columns)
+                if missing:
+                    log_info(f"⚠️ JoinQuant 字段缺失：{missing}，显示原始数据")
+                    return df.head(10), "JoinQuant 前十大股东（季报）"
                 df = df.rename(columns={
                     "shareholder_name": "股东名称",
                     "period":           "报告期",
@@ -1061,33 +1091,11 @@ def get_holding_structure(stock_code):
                 })
                 keep = [c for c in ["股东名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
                 return df[keep], "JoinQuant 前十大股东（季报）"
-            return None, "⚠️ JoinQuant 暂无该股票持仓数据"
 
         except Exception as e:
-            log_info(f"⚠️ JoinQuant 持仓失败（{e}），切换 Tushare")
-    else:
-        log_info("⚠️ 未配置 JQ_USERNAME / JQ_PASSWORD，跳过 JoinQuant")
+            log_info(f"⚠️ JoinQuant 持仓失败（{e}）")
 
-    # ── 次：Tushare top_inst（需较高积分）──
-    token = st.secrets.get("TUSHARE_TOKEN")
-    if token:
-        try:
-            import tushare as ts
-            ts.set_token(token)
-            pro = ts.pro_api()
-            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
-            trade_date = datetime.now().strftime("%Y%m%d")
-            df = pro.top_inst(ts_code=ts_code, trade_date=trade_date)
-            if df is not None and not df.empty:
-                return df.head(10), "Tushare"
-        except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
-                log_info("⚠️ Tushare 持仓积分不足")
-            else:
-                log_info(f"⚠️ Tushare 持仓失败（{e}）")
-
-    return None, "⚠️ 持仓数据暂不可用（JoinQuant/Tushare 均未成功，请查看日志）"
+    return None, "⚠️ 持仓数据暂不可用"
 
 
 # ===== 星级评级 =====
@@ -1242,6 +1250,12 @@ if st.button("开始分析"):
 
     try:
         if stock_code:
+            # ===== 股票代码格式校验 =====
+            if not stock_code.isdigit() or len(stock_code) != 6:
+                st.error("❌ 股票代码格式错误，请输入6位纯数字（如：000001）")
+                st.session_state.analyze_running = False
+                st.stop()
+
             st.write("🔍 分析中，请稍等...")
 
             df, stock_name = get_stock_data(stock_code)
