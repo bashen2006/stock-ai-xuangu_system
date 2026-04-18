@@ -56,7 +56,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V5.8</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V5.9</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -80,7 +80,6 @@ with st.expander("📋 更新日志", expanded=False):
 </div>
 """, unsafe_allow_html=True)
 
-stock_code = st.text_input("请输入股票代码（如：000001）")
 
 # ===== 侧边栏 =====
 with st.sidebar:
@@ -1200,548 +1199,563 @@ def check_performance():
 
     return pd.DataFrame(results)
 
-# ===== 选股模式（提前定义，主分析也需要用）=====
-st.subheader("🤖 自动选股（V3.4）")
-mode = st.selectbox(
-    "选择选股模式",
-    ["趋势（追涨）", "潜力（低吸）"]
-)
-mode_type = "trend" if "趋势" in mode else "dip"
-
 # ===== 执行控制状态初始化 =====
 if "analyze_running" not in st.session_state:
     st.session_state.analyze_running = False
-
 if "select_running" not in st.session_state:
     st.session_state.select_running = False
-
 if "stock_pool" not in st.session_state:
     st.session_state.stock_pool = None
+if "mode_type" not in st.session_state:
+    st.session_state.mode_type = "trend"
 
-# ===== 主分析 =====
-if st.button("开始分析"):
+# mode_type 读自 session_state（在自动选股 tab 里可以更新）
+mode_type = st.session_state.mode_type
 
-    if st.session_state.analyze_running:
-        st.warning("⚠️ 正在分析中，请稍候")
-        st.stop()
+# ===== 三大功能 Tab =====
+tab_analyze, tab_select, tab_review = st.tabs(["📈 单股分析", "🤖 自动选股", "📊 历史复盘"])
 
-    st.session_state.analyze_running = True
+# ══════════════════════════════════════════════
+# Tab 1：单股分析
+# ══════════════════════════════════════════════
+with tab_analyze:
+    stock_code = st.text_input("请输入股票代码（如：000001）", key="stock_code_input")
 
-    try:
-        if stock_code:
-            # ===== 股票代码格式校验 =====
-            if not stock_code.isdigit() or len(stock_code) != 6:
-                st.error("❌ 股票代码格式错误，请输入6位纯数字（如：000001）")
-                st.session_state.analyze_running = False
-                st.stop()
+    if st.button("开始分析", key="btn_analyze"):
 
-            st.write("🔍 分析中，请稍等...")
+        if st.session_state.analyze_running:
+            st.warning("⚠️ 正在分析中，请稍候")
+            st.stop()
 
-            df, stock_name = get_stock_data(stock_code)
+        st.session_state.analyze_running = True
 
-            if df is None:
-                log_error("❌ 数据获取失败，请查看上方具体原因")
-                st.session_state.analyze_running = False
-                st.stop()
+        try:
+            if stock_code:
+                # ===== 股票代码格式校验 =====
+                if not stock_code.isdigit() or len(stock_code) != 6:
+                    st.error("❌ 股票代码格式错误，请输入6位纯数字（如：000001）")
+                    st.session_state.analyze_running = False
+                    st.stop()
 
-            df = df.tail(100)
-            df = calculate_indicators(df)
+                st.write("🔍 分析中，请稍等...")
 
-            latest = df.iloc[-1]
-            price = latest['收盘']
+                df, stock_name = get_stock_data(stock_code)
 
-            # ===== 资金行为分析 =====
-            money_state, money_score = detect_money_flow(df)
-            money_explain = explain_money_flow(money_state, money_score)
+                if df is None:
+                    log_error("❌ 数据获取失败，请查看上方具体原因")
+                    st.session_state.analyze_running = False
+                    st.stop()
 
-            high_20 = df['最高'].tail(20).max()
-            low_20 = df['最低'].tail(20).min()
+                df = df.tail(100)
+                df = calculate_indicators(df)
 
-            high_60 = df['最高'].tail(60).max()
-            low_60 = df['最低'].tail(60).min()
+                latest = df.iloc[-1]
+                price = latest['收盘']
 
-            short_trend, mid_trend = get_trend(df)
+                # ===== 资金行为分析 =====
+                money_state, money_score = detect_money_flow(df)
+                money_explain = explain_money_flow(money_state, money_score)
 
-            # ===== 第1步：基础评分 =====
-            base_score, _, _, _, _ = calculate_score_v2(
-                df, price, low_20, high_20, mode_type
-            )
+                high_20 = df['最高'].tail(20).max()
+                low_20 = df['最低'].tail(20).min()
 
-            # ===== 第2步：多因子评分 =====
-            mf_score = multi_factor_score(df)
+                high_60 = df['最高'].tail(60).max()
+                low_60 = df['最低'].tail(60).min()
 
-            # ===== 第3步：融合评分 =====
-            combined_score = int(base_score * 0.6 + mf_score * 0.4)
+                short_trend, mid_trend = get_trend(df)
 
-            # ===== 第4步：启动识别 =====
-            start_signal, start_level, start_strength = detect_start_signal(df)
-
-            # ===== 第5步：统一决策（资金阶段为主裁判）=====
-            final_score, phase = unified_decision(
-                df, combined_score, money_state, money_score
-            )
-
-            # ===== 第6步：机构评级（先取数，再计算加成）=====
-            ratings_df, ratings_src = get_institution_ratings(stock_code)
-
-            # 机构评级加成（最高±10分）
-            ratings_bonus = 0
-            if ratings_df is not None and not ratings_df.empty:
-                rating_col = next(
-                    (c for c in ["评级", "rating", "最新评级"] if c in ratings_df.columns), None
+                # ===== 第1步：基础评分 =====
+                base_score, _, _, _, _ = calculate_score_v2(
+                    df, price, low_20, high_20, mode_type
                 )
-                if rating_col:
-                    for r in ratings_df[rating_col].dropna().head(6):
-                        r = str(r)
-                        if any(k in r for k in ["强烈买入", "强买"]):
-                            ratings_bonus += 3
-                        elif any(k in r for k in ["买入", "增持", "推荐"]):
-                            ratings_bonus += 2
-                        elif any(k in r for k in ["减持", "看空"]):
-                            ratings_bonus -= 3
-                        elif any(k in r for k in ["卖出"]):
-                            ratings_bonus -= 5
-                    ratings_bonus = max(-10, min(10, ratings_bonus))
 
-            # ===== 第7步：启动信号加成（假突破惩罚 / 有效突破奖励）=====
-            if "假突破" in start_signal:
-                start_bonus = -8
-            elif "有效突破" in start_signal:
-                start_bonus = 5
-            else:
-                start_bonus = 0
+                # ===== 第2步：多因子评分 =====
+                mf_score = multi_factor_score(df)
 
-            # ===== 第8步：最终评分修正（所有维度汇总）=====
-            final_score = max(0, min(100, final_score + ratings_bonus + start_bonus))
+                # ===== 第3步：融合评分 =====
+                combined_score = int(base_score * 0.6 + mf_score * 0.4)
 
-            # ===== 第9步：生成交易信号 =====
-            final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
-                df, final_score, money_score
-            )
-            trade_logic = explain_trade_logic(final_score, money_score, latest['RSI'])
+                # ===== 第4步：启动识别 =====
+                start_signal, start_level, start_strength = detect_start_signal(df)
 
-            # ===== 第10步：移动止损更新 =====
-            if stop_loss is not None:
-                stop_loss = update_trailing_stop(stock_code, stop_loss)
+                # ===== 第5步：统一决策（资金阶段为主裁判）=====
+                final_score, phase = unified_decision(
+                    df, combined_score, money_state, money_score
+                )
 
-            # ===== 第11步：持仓结构（仅展示，不计分）=====
-            holdings_df, holdings_src = get_holding_structure(stock_code)
+                # ===== 第6步：机构评级（先取数，再计算加成）=====
+                ratings_df, ratings_src = get_institution_ratings(stock_code)
 
-            # ===== GPT分析（完整 + 热点判断）=====
-            prompt = f"""
-你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行"分析 + 交易决策"。
+                # 机构评级加成（最高±10分）
+                ratings_bonus = 0
+                if ratings_df is not None and not ratings_df.empty:
+                    rating_col = next(
+                        (c for c in ["评级", "rating", "最新评级"] if c in ratings_df.columns), None
+                    )
+                    if rating_col:
+                        for r in ratings_df[rating_col].dropna().head(6):
+                            r = str(r)
+                            if any(k in r for k in ["强烈买入", "强买"]):
+                                ratings_bonus += 3
+                            elif any(k in r for k in ["买入", "增持", "推荐"]):
+                                ratings_bonus += 2
+                            elif any(k in r for k in ["减持", "看空"]):
+                                ratings_bonus -= 3
+                            elif any(k in r for k in ["卖出"]):
+                                ratings_bonus -= 5
+                        ratings_bonus = max(-10, min(10, ratings_bonus))
 
-==============================
-【股票信息】
-名称：{stock_name}
-代码：{stock_code}
-当前价格：{price}
+                # ===== 第7步：启动信号加成（假突破惩罚 / 有效突破奖励）=====
+                if "假突破" in start_signal:
+                    start_bonus = -8
+                elif "有效突破" in start_signal:
+                    start_bonus = 5
+                else:
+                    start_bonus = 0
 
-==============================
-【趋势结构】
-短线趋势：{short_trend}
-波段趋势：{mid_trend}
+                # ===== 第8步：最终评分修正（所有维度汇总）=====
+                final_score = max(0, min(100, final_score + ratings_bonus + start_bonus))
 
-==============================
-【关键位置】
-近支撑：{low_20}
-强支撑：{low_60}
+                # ===== 第9步：生成交易信号 =====
+                final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
+                    df, final_score, money_score
+                )
+                trade_logic = explain_trade_logic(final_score, money_score, latest['RSI'])
 
-近压力：{high_20}
-强压力：{high_60}
+                # ===== 第10步：移动止损更新 =====
+                if stop_loss is not None:
+                    stop_loss = update_trailing_stop(stock_code, stop_loss)
 
-==============================
-【技术指标】
-RSI：{latest['RSI']:.2f}
-MACD：{latest['MACD']:.2f}
+                # ===== 第11步：持仓结构（仅展示，不计分）=====
+                holdings_df, holdings_src = get_holding_structure(stock_code)
 
-KDJ：
-K={latest['K']:.2f}
-D={latest['D']:.2f}
-J={latest['J']:.2f}
+                # ===== GPT分析（完整 + 热点判断）=====
+                prompt = f"""
+    你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行"分析 + 交易决策"。
 
-布林带：
-上轨：{latest['UPPER']:.2f}
-中轨：{latest['MB']:.2f}
-下轨：{latest['LOWER']:.2f}
+    ==============================
+    【股票信息】
+    名称：{stock_name}
+    代码：{stock_code}
+    当前价格：{price}
 
-==============================
-【成交量】
-当前成交量：{latest['成交量']}
-5日均量：{latest['VOL_MA5']:.0f}
+    ==============================
+    【趋势结构】
+    短线趋势：{short_trend}
+    波段趋势：{mid_trend}
 
-==============================
-【系统评分】
-基础评分：{base_score}/100
-多因子评分：{mf_score}/100
-机构评级加成：{ratings_bonus:+d}
-启动信号加成：{start_bonus:+d}
-融合评分：{final_score}/100
-当前阶段：{phase}
+    ==============================
+    【关键位置】
+    近支撑：{low_20}
+    强支撑：{low_60}
 
-==============================
-【资金行为（核心）】
-主力状态：{money_state}
-资金强度：{money_score}/100
+    近压力：{high_20}
+    强压力：{high_60}
 
-======================================
+    ==============================
+    【技术指标】
+    RSI：{latest['RSI']:.2f}
+    MACD：{latest['MACD']:.2f}
 
-请严格按照以下结构输出（必须逐条回答）：
+    KDJ：
+    K={latest['K']:.2f}
+    D={latest['D']:.2f}
+    J={latest['J']:.2f}
 
-【1. 当前阶段判断（核心）】
-（必须从以下中选择一个：下跌 / 反弹 / 试盘 / 启动 / 主升 / 出货）
-并说明理由
+    布林带：
+    上轨：{latest['UPPER']:.2f}
+    中轨：{latest['MB']:.2f}
+    下轨：{latest['LOWER']:.2f}
 
-【2. 趋势分析】
-短线 + 波段是否共振？是否出现拐点？
+    ==============================
+    【成交量】
+    当前成交量：{latest['成交量']}
+    5日均量：{latest['VOL_MA5']:.0f}
 
-【3. 是否接近突破（非常关键）】
-（是 / 否 + 理由）
-是否接近压力位或即将进入主升段
+    ==============================
+    【系统评分】
+    基础评分：{base_score}/100
+    多因子评分：{mf_score}/100
+    机构评级加成：{ratings_bonus:+d}
+    启动信号加成：{start_bonus:+d}
+    融合评分：{final_score}/100
+    当前阶段：{phase}
 
-【4. 上涨概率（必须给百分比）】
+    ==============================
+    【资金行为（核心）】
+    主力状态：{money_state}
+    资金强度：{money_score}/100
 
-【5. 风险评估】
-（低 / 中 / 高）
-说明风险来源（高位 / 超买 / 压力位 / 资金不足等）
+    ======================================
 
-【6. 主力资金解读（必须结合）】
-说明当前是：吸筹 / 试盘 / 拉升 / 出货
-并判断资金是增强还是减弱
+    请严格按照以下结构输出（必须逐条回答）：
 
-【7. 系统交易决策说明】
-当前系统信号：{final_signal}（{buy_tag if buy_tag else "无买点标签"}）
-当前阶段：{phase}
-请解释这个信号是否合理，并给出补充说明。不得推翻系统结论。
+    【1. 当前阶段判断（核心）】
+    （必须从以下中选择一个：下跌 / 反弹 / 试盘 / 启动 / 主升 / 出货）
+    并说明理由
 
-【8. 具体操作策略（必须给价格）】
-- 建议买点：
-- 止损位置：
-- 止盈目标：
+    【2. 趋势分析】
+    短线 + 波段是否共振？是否出现拐点？
 
-【9. 行业与热点分析】
-所属行业是什么？
-是否属于当前热点（AI / 半导体 / 新能源等）？
+    【3. 是否接近突破（非常关键）】
+    （是 / 否 + 理由）
+    是否接近压力位或即将进入主升段
 
-【10. 是否容易被套】
-说明在当前价格买入的风险
+    【4. 上涨概率（必须给百分比）】
 
-【11. 一句话总结（必须通俗易懂）】
-用一句话说明现在该不该操作
+    【5. 风险评估】
+    （低 / 中 / 高）
+    说明风险来源（高位 / 超买 / 压力位 / 资金不足等）
 
-======================================
+    【6. 主力资金解读（必须结合）】
+    说明当前是：吸筹 / 试盘 / 拉升 / 出货
+    并判断资金是增强还是减弱
 
-【严格要求】
-❗ 必须给明确结论（不能模糊）
-❗ 必须结合"资金行为"分析
-❗ 必须给"具体价格"
-❗ 禁止只说"建议关注""可能上涨"
-❗ 必须判断"是否属于启动临界点（即将突破）"
-"""
+    【7. 系统交易决策说明】
+    当前系统信号：{final_signal}（{buy_tag if buy_tag else "无买点标签"}）
+    当前阶段：{phase}
+    请解释这个信号是否合理，并给出补充说明。不得推翻系统结论。
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}]
-            )
+    【8. 具体操作策略（必须给价格）】
+    - 建议买点：
+    - 止损位置：
+    - 止盈目标：
 
-            result = response.choices[0].message.content
+    【9. 行业与热点分析】
+    所属行业是什么？
+    是否属于当前热点（AI / 半导体 / 新能源等）？
 
-            # ===== 提取建议 =====
-            advice = "未知"
+    【10. 是否容易被套】
+    说明在当前价格买入的风险
 
-            if "强烈看多" in result:
-                advice = "强烈看多"
-            elif "轻仓" in result:
-                advice = "轻仓"
-            elif "观望" in result:
-                advice = "观望"
-            elif "不建议" in result:
-                advice = "不建议"
+    【11. 一句话总结（必须通俗易懂）】
+    用一句话说明现在该不该操作
 
-            # ===== 热点识别：只看第9项内容 =====
-            import re as _re
-            hot_flag = "❄️ 非热点"
-            # 提取第9项到第10项之间的内容
-            section9_match = _re.search(r'【9[\.、．\s].*?】(.*?)(?:【10|$)', result, _re.DOTALL)
-            if section9_match:
-                section9 = section9_match.group(1)
-                # 第9项内容里只要出现"热点"且没有明确否定就判为热点
-                if "热点" in section9 and not any(
-                    kw in section9 for kw in ["不属于", "非热点", "不是热点", "不属热点"]
-                ):
-                    hot_flag = "🔥 热点股"
-            else:
-                # 找不到第9项时降级为全文关键词判断
-                if any(kw in result for kw in ["不属于热点", "非热点", "不是热点"]):
-                    hot_flag = "❄️ 非热点"
-                elif any(kw in result for kw in ["处于热点", "主线热点", "属于热点", "热点行业"]):
-                    hot_flag = "🔥 热点股"
+    ======================================
 
-            # ===== 页面输出（V4.7 压缩版）=====
-            import plotly.graph_objects as go
-            import plotly.express as px
-            import plotly.subplots as sp
+    【严格要求】
+    ❗ 必须给明确结论（不能模糊）
+    ❗ 必须结合"资金行为"分析
+    ❗ 必须给"具体价格"
+    ❗ 禁止只说"建议关注""可能上涨"
+    ❗ 必须判断"是否属于启动临界点（即将突破）"
+    """
 
-            st.success("✅ 分析完成")
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}]
+                )
 
-            # ===== 标题 + 星级 =====
-            prev_close = df['收盘'].iloc[-2] if len(df) > 1 else price
-            chg = (price - prev_close) / prev_close * 100
-            chg_str = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
-            chg_color = "red" if chg >= 0 else "green"
-            stars = score_to_stars(final_score)
+                result = response.choices[0].message.content
 
-            st.markdown(
-                f'<div style="margin-bottom:4px">'
-                f'<span style="font-size:18px;font-weight:700">{stock_name}（{stock_code}）</span>'
-                f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{chg_color}">{price:.2f} {chg_str}</span>'
-                f'</div>'
-                f'<div style="font-size:20px;margin-bottom:2px">{stars}</div>'
-                f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">阶段：{phase}&nbsp;|&nbsp;{hot_flag}</div>',
-                unsafe_allow_html=True
-            )
+                # ===== 提取建议 =====
+                advice = "未知"
 
-            # ===== 四维评分条 =====
-            st.markdown('<div style="font-size:14px;font-weight:600;margin-bottom:8px">📊 核心评分</div>', unsafe_allow_html=True)
-            emotion_score = calc_emotion_score(latest['RSI'])
+                if "强烈看多" in result:
+                    advice = "强烈看多"
+                elif "轻仓" in result:
+                    advice = "轻仓"
+                elif "观望" in result:
+                    advice = "观望"
+                elif "不建议" in result:
+                    advice = "不建议"
 
-            dims = [
-                ("技术",  base_score,    "#38bdf8"),
-                ("资金",  money_score,   "#a78bfa"),
-                ("情绪",  emotion_score, "#f59e0b"),
-                ("多因子", mf_score,     "#34d399"),
-            ]
-            for label, val, col in dims:
-                bar_html = (
-                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">'
-                    f'<span style="color:{col};font-weight:600;font-size:13px;min-width:44px">{label}</span>'
-                    f'<div style="flex:1;background:#e2e8f0;border-radius:4px;height:8px">'
-                    f'<div style="width:{val}%;height:100%;background:{col};border-radius:4px"></div></div>'
-                    f'<span style="color:#64748b;font-size:12px;min-width:44px;text-align:right">{val}/100</span>'
+                # ===== 热点识别：只看第9项内容 =====
+                import re as _re
+                hot_flag = "❄️ 非热点"
+                # 提取第9项到第10项之间的内容
+                section9_match = _re.search(r'【9[\.、．\s].*?】(.*?)(?:【10|$)', result, _re.DOTALL)
+                if section9_match:
+                    section9 = section9_match.group(1)
+                    # 第9项内容里只要出现"热点"且没有明确否定就判为热点
+                    if "热点" in section9 and not any(
+                        kw in section9 for kw in ["不属于", "非热点", "不是热点", "不属热点"]
+                    ):
+                        hot_flag = "🔥 热点股"
+                else:
+                    # 找不到第9项时降级为全文关键词判断
+                    if any(kw in result for kw in ["不属于热点", "非热点", "不是热点"]):
+                        hot_flag = "❄️ 非热点"
+                    elif any(kw in result for kw in ["处于热点", "主线热点", "属于热点", "热点行业"]):
+                        hot_flag = "🔥 热点股"
+
+                # ===== 页面输出（V4.7 压缩版）=====
+                import plotly.graph_objects as go
+                import plotly.express as px
+                import plotly.subplots as sp
+
+                st.success("✅ 分析完成")
+
+                # ===== 标题 + 星级 =====
+                prev_close = df['收盘'].iloc[-2] if len(df) > 1 else price
+                chg = (price - prev_close) / prev_close * 100
+                chg_str = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
+                chg_color = "red" if chg >= 0 else "green"
+                stars = score_to_stars(final_score)
+
+                st.markdown(
+                    f'<div style="margin-bottom:4px">'
+                    f'<span style="font-size:18px;font-weight:700">{stock_name}（{stock_code}）</span>'
+                    f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{chg_color}">{price:.2f} {chg_str}</span>'
                     f'</div>'
+                    f'<div style="font-size:20px;margin-bottom:2px">{stars}</div>'
+                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">阶段：{phase}&nbsp;|&nbsp;{hot_flag}</div>',
+                    unsafe_allow_html=True
                 )
-                st.markdown(bar_html, unsafe_allow_html=True)
 
-            bonus_parts = []
-            if ratings_bonus != 0:
-                bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
-            if start_bonus != 0:
-                bonus_parts.append(f"启动信号 {start_bonus:+d}")
-            st.markdown(
-                f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">'
-                f'综合评分：{final_score}/100'
-                + (f'&nbsp;|&nbsp;加成：{"，".join(bonus_parts)}' if bonus_parts else '')
-                + '</div>',
-                unsafe_allow_html=True
-            )
+                # ===== 四维评分条 =====
+                st.markdown('<div style="font-size:14px;font-weight:600;margin-bottom:8px">📊 核心评分</div>', unsafe_allow_html=True)
+                emotion_score = calc_emotion_score(latest['RSI'])
 
-            # ===== K线 + 成交量（合并子图）=====
-            chart_df = df.copy()
+                dims = [
+                    ("技术",  base_score,    "#38bdf8"),
+                    ("资金",  money_score,   "#a78bfa"),
+                    ("情绪",  emotion_score, "#f59e0b"),
+                    ("多因子", mf_score,     "#34d399"),
+                ]
+                for label, val, col in dims:
+                    bar_html = (
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">'
+                        f'<span style="color:{col};font-weight:600;font-size:13px;min-width:44px">{label}</span>'
+                        f'<div style="flex:1;background:#e2e8f0;border-radius:4px;height:8px">'
+                        f'<div style="width:{val}%;height:100%;background:{col};border-radius:4px"></div></div>'
+                        f'<span style="color:#64748b;font-size:12px;min-width:44px;text-align:right">{val}/100</span>'
+                        f'</div>'
+                    )
+                    st.markdown(bar_html, unsafe_allow_html=True)
 
-            fig = sp.make_subplots(
-                rows=2, cols=1,
-                shared_xaxes=True,
-                row_heights=[0.72, 0.28],
-                vertical_spacing=0.02
-            )
-            fig.add_trace(go.Candlestick(
-                x=chart_df["日期"],
-                open=chart_df["开盘"], high=chart_df["最高"],
-                low=chart_df["最低"], close=chart_df["收盘"],
-                name="K线"
-            ), row=1, col=1)
-            for ma, color in [("MA5", "#f97316"), ("MA10", "#38bdf8"), ("MA20", "#a78bfa")]:
-                if ma in chart_df.columns:
-                    fig.add_trace(go.Scatter(
-                        x=chart_df["日期"], y=chart_df[ma],
-                        mode="lines", name=ma, line=dict(width=1, color=color)
-                    ), row=1, col=1)
-            vol_colors = ["#ef4444" if c >= o else "#10b981"
-                          for c, o in zip(chart_df["收盘"], chart_df["开盘"])]
-            fig.add_trace(go.Bar(
-                x=chart_df["日期"], y=chart_df["成交量"],
-                marker_color=vol_colors, name="成交量", showlegend=False
-            ), row=2, col=1)
-            fig.update_layout(
-                height=480, showlegend=True,
-                xaxis_rangeslider_visible=False,
-                dragmode=False,
-                legend=dict(
-                    orientation="h", y=1.02,
-                    itemclick=False,
-                    itemdoubleclick=False
-                ),
-                margin=dict(l=10, r=10, t=40, b=10)
-            )
-            st.plotly_chart(fig, width='stretch',
-                            config={"scrollZoom": False,
-                                    "doubleClick": False,
-                                    "displayModeBar": False})
+                bonus_parts = []
+                if ratings_bonus != 0:
+                    bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
+                if start_bonus != 0:
+                    bonus_parts.append(f"启动信号 {start_bonus:+d}")
+                st.markdown(
+                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">'
+                    f'综合评分：{final_score}/100'
+                    + (f'&nbsp;|&nbsp;加成：{"，".join(bonus_parts)}' if bonus_parts else '')
+                    + '</div>',
+                    unsafe_allow_html=True
+                )
 
-            # ===== RSI 曲线 =====
-            if "RSI" in chart_df.columns:
-                rsi_df = chart_df.tail(120)
-                fig_rsi = go.Figure()
-                fig_rsi.add_trace(go.Scatter(
-                    x=rsi_df["日期"], y=rsi_df["RSI"],
-                    mode="lines", name="RSI", line=dict(color="#38bdf8")
-                ))
-                fig_rsi.add_hline(y=70, line_dash="dash", line_color="red",
-                                  annotation_text="超买70")
-                fig_rsi.add_hline(y=30, line_dash="dash", line_color="green",
-                                  annotation_text="超卖30")
-                fig_rsi.update_layout(
-                    title="RSI指标", height=220,
-                    showlegend=False,
+                # ===== K线 + 成交量（合并子图）=====
+                chart_df = df.copy()
+
+                fig = sp.make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    row_heights=[0.72, 0.28],
+                    vertical_spacing=0.02
+                )
+                fig.add_trace(go.Candlestick(
+                    x=chart_df["日期"],
+                    open=chart_df["开盘"], high=chart_df["最高"],
+                    low=chart_df["最低"], close=chart_df["收盘"],
+                    name="K线"
+                ), row=1, col=1)
+                for ma, color in [("MA5", "#f97316"), ("MA10", "#38bdf8"), ("MA20", "#a78bfa")]:
+                    if ma in chart_df.columns:
+                        fig.add_trace(go.Scatter(
+                            x=chart_df["日期"], y=chart_df[ma],
+                            mode="lines", name=ma, line=dict(width=1, color=color)
+                        ), row=1, col=1)
+                vol_colors = ["#ef4444" if c >= o else "#10b981"
+                              for c, o in zip(chart_df["收盘"], chart_df["开盘"])]
+                fig.add_trace(go.Bar(
+                    x=chart_df["日期"], y=chart_df["成交量"],
+                    marker_color=vol_colors, name="成交量", showlegend=False
+                ), row=2, col=1)
+                fig.update_layout(
+                    height=480, showlegend=True,
+                    xaxis_rangeslider_visible=False,
                     dragmode=False,
+                    legend=dict(
+                        orientation="h", y=1.02,
+                        itemclick=False,
+                        itemdoubleclick=False
+                    ),
                     margin=dict(l=10, r=10, t=40, b=10)
                 )
-                st.plotly_chart(fig_rsi, width='stretch',
+                st.plotly_chart(fig, width='stretch',
                                 config={"scrollZoom": False,
                                         "doubleClick": False,
                                         "displayModeBar": False})
 
-            # ===== 持仓结构饼图 =====
-            st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
-            if holdings_df is not None:
-                st.caption(f"数据来源：{holdings_src}")
-                col_name = next(
-                    (c for c in holdings_df.columns if "机构" in c or "holder" in c.lower()), None
-                )
-                col_val = next(
-                    (c for c in holdings_df.columns if "持股" in c or "数量" in c or "share" in c.lower()), None
-                )
-                if col_name and col_val:
-                    fig_pie = px.pie(
-                        holdings_df.head(6),
-                        names=col_name, values=col_val,
-                        title="机构持仓结构（前6）"
+                # ===== RSI 曲线 =====
+                if "RSI" in chart_df.columns:
+                    rsi_df = chart_df.tail(120)
+                    fig_rsi = go.Figure()
+                    fig_rsi.add_trace(go.Scatter(
+                        x=rsi_df["日期"], y=rsi_df["RSI"],
+                        mode="lines", name="RSI", line=dict(color="#38bdf8")
+                    ))
+                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red",
+                                      annotation_text="超买70")
+                    fig_rsi.add_hline(y=30, line_dash="dash", line_color="green",
+                                      annotation_text="超卖30")
+                    fig_rsi.update_layout(
+                        title="RSI指标", height=220,
+                        showlegend=False,
+                        dragmode=False,
+                        margin=dict(l=10, r=10, t=40, b=10)
                     )
-                    fig_pie.update_layout(showlegend=True)
-                    st.plotly_chart(fig_pie, width='stretch')
+                    st.plotly_chart(fig_rsi, width='stretch',
+                                    config={"scrollZoom": False,
+                                            "doubleClick": False,
+                                            "displayModeBar": False})
+
+                # ===== 持仓结构饼图 =====
+                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
+                if holdings_df is not None:
+                    st.caption(f"数据来源：{holdings_src}")
+                    col_name = next(
+                        (c for c in holdings_df.columns if "机构" in c or "holder" in c.lower()), None
+                    )
+                    col_val = next(
+                        (c for c in holdings_df.columns if "持股" in c or "数量" in c or "share" in c.lower()), None
+                    )
+                    if col_name and col_val:
+                        fig_pie = px.pie(
+                            holdings_df.head(6),
+                            names=col_name, values=col_val,
+                            title="机构持仓结构（前6）"
+                        )
+                        fig_pie.update_layout(showlegend=True)
+                        st.plotly_chart(fig_pie, width='stretch')
+                    else:
+                        st.dataframe(holdings_df, width='stretch', hide_index=True)
                 else:
-                    st.dataframe(holdings_df, width='stretch', hide_index=True)
-            else:
-                st.warning(holdings_src)
+                    st.warning(holdings_src)
 
-            # ===== 机构评级（压缩统计）=====
-            st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
-            if ratings_df is not None and not ratings_df.empty:
-                st.caption(f"数据来源：{ratings_src}")
-                rating_col = next(
-                    (c for c in ratings_df.columns if "评级" in c or "rating" in c.lower()), None
+                # ===== 机构评级（压缩统计）=====
+                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
+                if ratings_df is not None and not ratings_df.empty:
+                    st.caption(f"数据来源：{ratings_src}")
+                    rating_col = next(
+                        (c for c in ratings_df.columns if "评级" in c or "rating" in c.lower()), None
+                    )
+                    if rating_col:
+                        buy_cnt  = int(ratings_df[rating_col].astype(str).str.contains("买入|增持|推荐").sum())
+                        sell_cnt = int(ratings_df[rating_col].astype(str).str.contains("卖出|减持").sum())
+                        hold_cnt = len(ratings_df) - buy_cnt - sell_cnt
+                        r1, r2, r3 = st.columns(3)
+                        r1.metric("🟢 买入/增持", buy_cnt)
+                        r2.metric("🟡 中性/持有", hold_cnt)
+                        r3.metric("🔴 卖出/减持", sell_cnt)
+                    st.dataframe(ratings_df, width='stretch', hide_index=True)
+                else:
+                    st.warning(ratings_src)
+
+                # ===== 交易信号（高亮）=====
+                signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
+                st.markdown(
+                    f'<div style="font-size:22px;font-weight:700;margin:16px 0 8px">'
+                    f'🎯 交易信号：<span style="color:{signal_color}">'
+                    f'{final_signal}{"（" + buy_tag + "）" if buy_tag else ""}</span></div>',
+                    unsafe_allow_html=True
                 )
-                if rating_col:
-                    buy_cnt  = int(ratings_df[rating_col].astype(str).str.contains("买入|增持|推荐").sum())
-                    sell_cnt = int(ratings_df[rating_col].astype(str).str.contains("卖出|减持").sum())
-                    hold_cnt = len(ratings_df) - buy_cnt - sell_cnt
-                    r1, r2, r3 = st.columns(3)
-                    r1.metric("🟢 买入/增持", buy_cnt)
-                    r2.metric("🟡 中性/持有", hold_cnt)
-                    r3.metric("🔴 卖出/减持", sell_cnt)
-                st.dataframe(ratings_df, width='stretch', hide_index=True)
-            else:
-                st.warning(ratings_src)
+                sc1, sc2, sc3 = st.columns(3)
+                if buy_price:
+                    sc1.metric("建议买点", buy_price)
+                if stop_loss:
+                    sc2.metric("止损位", stop_loss)
+                if take_profit:
+                    sc3.metric("止盈位", take_profit)
 
-            # ===== 交易信号（高亮）=====
-            signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
-            st.markdown(
-                f'<div style="font-size:22px;font-weight:700;margin:16px 0 8px">'
-                f'🎯 交易信号：<span style="color:{signal_color}">'
-                f'{final_signal}{"（" + buy_tag + "）" if buy_tag else ""}</span></div>',
-                unsafe_allow_html=True
-            )
-            sc1, sc2, sc3 = st.columns(3)
-            if buy_price:
-                sc1.metric("建议买点", buy_price)
-            if stop_loss:
-                sc2.metric("止损位", stop_loss)
-            if take_profit:
-                sc3.metric("止盈位", take_profit)
+                # ===== 三栏辅助信息 =====
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📊 技术面</div>', unsafe_allow_html=True)
+                    st.write(f"短线趋势：{short_trend}")
+                    st.write(f"波段趋势：{mid_trend}")
+                    st.write(f"启动信号：{start_signal}（{start_level}，强度 {start_strength}/100）")
+                with col2:
+                    st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">💰 资金面</div>', unsafe_allow_html=True)
+                    st.write(f"主力状态：{money_state}")
+                    st.write(f"资金强度：{money_score}/100")
+                    st.info(money_explain)
+                with col3:
+                    st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📌 评分说明</div>', unsafe_allow_html=True)
+                    st.write(f"基础技术：{base_score}/100")
+                    st.write(f"多因子：{mf_score}/100")
+                    st.write(f"机构加成：{ratings_bonus:+d}")
+                    st.write(f"启动加成：{start_bonus:+d}")
+                    st.write(f"最终：{final_score}/100")
 
-            # ===== 三栏辅助信息 =====
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📊 技术面</div>', unsafe_allow_html=True)
-                st.write(f"短线趋势：{short_trend}")
-                st.write(f"波段趋势：{mid_trend}")
-                st.write(f"启动信号：{start_signal}（{start_level}，强度 {start_strength}/100）")
-            with col2:
-                st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">💰 资金面</div>', unsafe_allow_html=True)
-                st.write(f"主力状态：{money_state}")
-                st.write(f"资金强度：{money_score}/100")
-                st.info(money_explain)
-            with col3:
-                st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📌 评分说明</div>', unsafe_allow_html=True)
-                st.write(f"基础技术：{base_score}/100")
-                st.write(f"多因子：{mf_score}/100")
-                st.write(f"机构加成：{ratings_bonus:+d}")
-                st.write(f"启动加成：{start_bonus:+d}")
-                st.write(f"最终：{final_score}/100")
+                # ===== AI分析报告 =====
+                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">📊 AI分析报告</div>', unsafe_allow_html=True)
+                st.write(result)
 
-            # ===== AI分析报告 =====
-            st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">📊 AI分析报告</div>', unsafe_allow_html=True)
-            st.write(result)
+                # ===== 保存记录 =====
+                save_record(stock_code, price, short_trend, mid_trend, final_score, advice)
 
-            # ===== 保存记录 =====
-            save_record(stock_code, price, short_trend, mid_trend, final_score, advice)
+        except Exception as e:
+            st.error(f"❌ 出错：{e}")
 
-    except Exception as e:
-        st.error(f"❌ 出错：{e}")
-
-    finally:
-        st.session_state.analyze_running = False
+        finally:
+            st.session_state.analyze_running = False
 
 
-# ===== 按钮 =====
-if st.button("开始自动选股"):
+    # ══════════════════════════════════════════════
+# Tab 2：自动选股
+# ══════════════════════════════════════════════
+with tab_select:
+    mode = st.selectbox(
+        "选择选股模式",
+        ["趋势（追涨）", "潜力（低吸）"],
+        key="select_mode"
+    )
+    st.session_state.mode_type = "trend" if "趋势" in mode else "dip"
+    mode_type = st.session_state.mode_type
 
-    if st.session_state.select_running:
-        st.warning("⚠️ 正在运行，请勿重复点击")
-        st.stop()
+    if st.button("开始自动选股", key="btn_select"):
 
-    st.session_state.select_running = True
-
-    try:
-        if st.session_state.get("stock_pool") is None:
-            st.session_state.stock_pool = get_stock_pool()
-
-        stock_list = st.session_state.stock_pool
-
-        if stock_list is None:
-            st.error("❌ 股票池获取失败")
-            st.session_state.select_running = False
+        if st.session_state.select_running:
+            st.warning("⚠️ 正在运行，请勿重复点击")
             st.stop()
 
-        st.write("🔍 选股中，请稍等...")
-        df_select = auto_select_stocks(stock_list, mode_type)
+        st.session_state.select_running = True
 
-        if df_select is not None:
-            st.dataframe(df_select)
+        try:
+            if st.session_state.get("stock_pool") is None:
+                st.session_state.stock_pool = get_stock_pool()
+
+            stock_list = st.session_state.stock_pool
+
+            if stock_list is None:
+                st.error("❌ 股票池获取失败")
+                st.session_state.select_running = False
+                st.stop()
+
+            st.write("🔍 选股中，请稍等...")
+            df_select = auto_select_stocks(stock_list, mode_type)
+
+            if df_select is not None:
+                st.dataframe(df_select)
+            else:
+                st.write("暂无结果")
+
+        except Exception as e:
+            log_error(f"❌ 自动选股异常：{translate_error(e)}")
+
+        finally:
+            st.session_state.select_running = False
+
+# ══════════════════════════════════════════════
+# Tab 3：历史复盘
+# ══════════════════════════════════════════════
+with tab_review:
+    if st.button("查看预测结果", key="btn_review"):
+        df_result = check_performance()
+
+        if df_result is not None:
+            st.dataframe(df_result)
+            st.markdown(
+                '<div style="font-size:18px;font-weight:700;margin:12px 0 6px">📊 统计分析</div>',
+                unsafe_allow_html=True
+            )
+            if not df_result.empty and "结果" in df_result.columns:
+                correct = len(df_result[df_result["结果"] == "✅ 正确"])
+                total = len(df_result)
+                st.write(f"正确率：{correct}/{total}")
         else:
-            st.write("暂无结果")
-
-    except Exception as e:
-        log_error(f"❌ 自动选股异常：{translate_error(e)}")
-
-    finally:
-        st.session_state.select_running = False
-
-# ===== 复盘按钮（修复版）=====
-st.subheader("📊 历史预测复盘")
-
-if st.button("查看预测结果"):
-    df_result = check_performance()
-
-    if df_result is not None:
-        st.dataframe(df_result)
-
-        st.subheader("📊 统计分析")
-
-        if not df_result.empty and "结果" in df_result.columns:
-            correct = len(df_result[df_result["结果"] == "✅ 正确"])
-            total = len(df_result)
-
-            st.write(f"正确率：{correct}/{total}")
-    else:
-        st.write("暂无复盘数据")
+            st.write("暂无复盘数据")
