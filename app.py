@@ -15,7 +15,7 @@ def translate_error(e):
     if "ERROR" in msg:
         return "❌ TuShare接口异常：可能原因 → Token未配置 / 积分不足 / 被限流"
     if "timeout" in msg.lower():
-        return "❌ 网络超时：服务器响应过慢"
+        return "❌ 网络超时：=服务器响应过慢"
     if "connection" in msg.lower():
         return "❌ 网络连接失败：请检查网络或服务器状态"
     if "KeyError" in msg:
@@ -45,126 +45,38 @@ def log_info(msg):
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+# ===== 数据源开关（根据检测结果调整）=====
+# AKShare 在境外 Streamlit Cloud 上网络不通，关闭避免无效调用
+ENABLE_AKSHARE = False
+# JoinQuant 免费版不包含 finance 表，关闭避免无效调用
+ENABLE_JQDATA_HOLDINGS = False
+
 st.set_page_config(layout="wide")
 
-st.markdown("### 📊 AI股票分析系统（专业版）")
-st.caption("版本：V5.5")
+st.markdown(
+    '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px">'
+    '<span style="font-size:16px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
+    '<span style="font-size:11px;color:#94a3b8">V5.6</span>'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-st.markdown("""
-### 📢 更新日志
-- V5.5：数据源能力检测
-  - 侧边栏新增"一键检测"按钮：自动检测 Tushare / JoinQuant / AKShare 三个数据源可用性
-  - JoinQuant 检测分两层：认证成功 + 持仓表是否可用，精确定位是哪层出问题
-  - 检测结果实时显示，不依赖手动试错
-- V5.4：容错机制完善
-  - 持仓数据源调换优先级：Tushare 主，JoinQuant 降为补充（JoinQuant 免费版不稳定）
-  - JoinQuant 字段校验：rename 前检查字段是否存在，缺失时显示原始数据而不是崩溃
-  - 股票代码合法性校验：非6位纯数字直接提示错误，不走接口
-  - 持仓/评级失败统一用 log_info（预期降级行为，不是错误）
-- V5.3：数据源和 UI 调整
-  - 标题字体缩小（st.title → h3）
-  - JoinQuant 持仓改用 STK_HOLDER_PERCENTAGE（前十大股东，免费版可用），替换不存在的 STK_INST_HOLD
-- V5.2：热点判断和日志修复
-  - 热点判断：冷词加入"不属于"（GPT 回答不带"热点"二字时也能正确识别），移除误匹配的"属于当前热点"
-  - 日志路径：改用 os.path.abspath(__file__) 绝对路径，解决 Streamlit Cloud 工作目录不一致导致日志文件为空的问题
-  - 日志写入失败时打印路径到 stdout，便于排查
-- V5.1：运行日志可视化
-  - 新增侧边栏"运行日志"面板，显示最近50条 log_info/log_error 输出
-  - 日志级别从 ERROR 升至 INFO，所有运行记录写入 run.log
-  - 解决 Streamlit Cloud 不记录 print() 输出导致无法追踪 JoinQuant 等接口调用状态的问题
-- V5.0：热点识别修复
-  - 修复所有股票都显示"热点股"的 bug：原因是 GPT 回答里必然包含"热点"一词，导致误判
-  - 改为匹配明确肯定词（"属于当前热点"/"热点板块"等）并优先排除否定词（"不属于热点"/"非热点"等）
-- V4.9：缓存机制根本修复
-  - 修复缓存永不过期的根本原因：Streamlit Cloud 部署时 clone 仓库会刷新文件修改时间，导致基于文件系统时间的判断失效
-  - 改为在 CSV 内写入时间戳列 _cached_at，过期判断完全基于文件内容，不受部署影响
-  - 旧格式缓存（无 _cached_at 列）自动视为过期，强制重新拉取
-- V4.8：稳定性修复
-  - 修复 Tushare top_inst 必填参数 trade_date 报错
-  - 全部替换废弃的 use_container_width → width='stretch'（消除 Streamlit 1.56 警告）
-  - 统一分析页所有标题字体为 18px（对齐股票名称大小）
-  - 交易信号标题改为 22px（比其他标题大一号）
-  - 修复 K线/RSI 显示 1970 年单条竖线（Tushare 日期格式 20260418 在数据获取阶段直接转为 datetime）
-  - RSI 图禁用触屏交互（dragmode=False + displayModeBar=False）
-  - 股票名称缓存修复（单独存 name_xxx.txt，缓存命中时正确显示名称）
-  - 移除 AKShare 失效函数（stock_analyst_rating_em / stock_institute_hold_detail 参数变更）
-- V4.7：触屏与显示修复
-  - 修复K线/RSI显示单条竖线的根本原因：Tushare日期格式"20260418"在渲染时未正确解析，现在在数据获取阶段统一转为datetime
-  - RSI图加 dragmode=False + displayModeBar=False，彻底禁用触屏交互
-  - 统一全页 UI 文字大小（标题18px，副标题14px，说明12px）
-  - 交易信号卖出加注RSI具体数值原因
-  - 修复股票名称缓存（名称单独存 name_xxx.txt）
-- V4.6：UI 压缩重构
-  - 标题栏加星级评级（1-5星，自动由综合评分生成）
-  - 四维评分条（技术/资金/情绪/多因子）+ progress bar
-  - K线与成交量合并为双排子图（共享X轴）
-  - 持仓结构表格升级为饼图（列名自动识别，无法识别时降级表格）
-  - 机构评级压缩为买入/中性/卖出统计 + 原始表格
-  - 交易信号高亮（红=买入，绿=卖出，橙=观望）
-  - 修正情绪评分公式（RSI区间映射，强势区高分）
-  - 修正 A股颜色惯例（红涨绿跌）
-- V4.5：评分体系完整化
-  - 机构评级加成（±10）：买入+2/增持+2/减持-3/卖出-5，纳入最终评分
-  - 启动信号加成：有效突破+5，假突破-8，纳入最终评分
-  - 评分链完整：技术×0.6 + 多因子×0.4 → 资金修正 → 机构加成 → 启动加成 → 最终分
-  - 持仓结构仅展示（列名不稳定，不可靠评分）
-  - UI 新增评分加成明细展示
-- V4.4：新增机构数据接口
-  - 机构评级：Tushare report_rc 主接口（需2000+积分），降级 AKShare 东方财富评级
-  - 持仓结构：Tushare top_inst 主接口（需较高积分），降级 AKShare 季度持仓
-  - 积分不足时自动降级并提示，不影响其他功能
-- V4.3：可视化界面升级
-  - 新增 K线图（叠加MA5/MA10/MA20）
-  - 新增成交量红绿柱图
-  - 新增 RSI 曲线（含70/30阈值线）
-  - 新增四宫格评分卡片
-  - 新增三栏信息区（技术/资金/决策）
-  - 宽屏布局
-- V4.2：多因子评分融合
-  - 新增 multi_factor_score：五维评分（趋势/资金稳定性/机构模拟/波动率/情绪）
-  - 最终评分 = base_score×0.6 + mf_score×0.4，再经 unified_decision 修正
-  - 修复资金稳定性判断逻辑（移除不可靠的单调递增判断）
-  - mf_score 注入 GPT prompt
-- V4.1：统一决策系统升级
-  - 新增 unified_decision：资金阶段作为最高裁判，统一评分
-  - generate_trade_signal 升级为三类触发买点（突破/回踩/低吸）
-  - 移除 apply_start_bonus 二次加分，消除与资金行为的重复计分
-  - GPT prompt 第7条改为"解释系统信号"，禁止独立推翻系统结论
-- V4.0：架构稳定性升级
-  - 数据缓存改为30分钟，选股每次实时重算
-  - 修复股票名称缓存显示为"缓存"的bug
-  - 全面迁移 Tushare Pro，移除 AKShare 依赖
-  - 新增中文错误提示系统 + 完整日志
-  - 执行控制：运行锁防重复点击，stock_pool 会话级缓存
-  - 股票池扩容至500支，选股分析上限100支
-- V3.9:启动识别增强模块
-- V3.5：加入资金行为分析
-- V3.3：双模式
-- V3.2：把"热点"加入总评分：
-- V3.1:调整自动选股函数
-- V3.0：
-  - 增加"自动选股"
-- V2.2：
-  - 修改"数据源"
-- V2.1：
-  - 自动运行，自动记录，自动保存
-- V1.4：
-  - 时间差判断（记录分析时间，判断：是否超过7天 / 30天）
-  - 最大回撤（关键）判断有没有：❗ 买了之后先跌很多（容易被套）
-  - 止损判断：👉 如果跌破 -5%：❌ 判定错误
-  - AI自动总结错误原因（核心）👉 GPT会输出：为什么错，哪个指标判断错，下次怎么改
-- V1.3：
-  - 修复复盘系统结构问题
+with st.expander("📋 更新日志", expanded=False):
+    st.markdown("""
+<div style="font-size:11px;color:#64748b;line-height:1.8">
 
-- V1.1：
-  - 增加版本号显示
-  - 增加更新日志展示
+**V5.6** 数据源终态定稿：禁用 JoinQuant/AKShare 无效调用，明确展示不可用原因；机构评级加成从评分链移除（数据不可靠）<br>
+**V5.5** 侧边栏一键检测数据源能力<br>
+**V5.4** 容错：股票代码校验、持仓源优先级调换、JoinQuant 字段校验<br>
+**V5.3** 标题缩小、JoinQuant 改用 STK_HOLDER_PERCENTAGE<br>
+**V5.2** 热点误判修复、日志绝对路径<br>
+**V5.1** 侧边栏运行日志可视化<br>
+**V5.0** 热点识别逻辑修复<br>
+**V4.9** 缓存过期机制根本修复（内嵌时间戳）<br>
+**V4.x** 可视化 UI、多因子评分、统一决策、执行控制等
 
-- V1.0：
-  - 基础AI分析系统
-  - 技术指标（MA / MACD / RSI）
-  - 趋势判断 + 评分系统
-""")
+</div>
+""", unsafe_allow_html=True)
 
 stock_code = st.text_input("请输入股票代码（如：000001）")
 
@@ -365,8 +277,11 @@ def get_stock_data(stock_code):
             log_info(f"⚠️ Tushare 异常（{translate_error(e)}），切换备用接口")
             df = None
 
-    # ===== 备用接口：AKShare =====
+    # ===== 备用接口：AKShare（当前环境关闭）=====
     if df is None:
+        if not ENABLE_AKSHARE:
+            log_info("⚠️ AKShare 备用接口已关闭（境外网络不通）")
+            return None, None
         try:
             import akshare as ak
             log_info(f"📌 AKShare 备用请求：{stock_code}")
@@ -1109,8 +1024,6 @@ def get_institution_ratings(stock_code):
 # ===== 持仓结构（Tushare主 + AKShare备，季度级）=====
 def get_holding_structure(stock_code):
 
-    jq_code = stock_code + ".XSHG" if stock_code.startswith("6") else stock_code + ".XSHE"
-
     # ── 主：Tushare top_inst（积分足时优先）──
     token = st.secrets.get("TUSHARE_TOKEN")
     if token:
@@ -1126,47 +1039,40 @@ def get_holding_structure(stock_code):
         except Exception as e:
             msg = str(e)
             if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
-                log_info("⚠️ Tushare 持仓积分不足，切换 JoinQuant")
+                log_info("⚠️ Tushare 持仓积分不足")
             else:
-                log_info(f"⚠️ Tushare 持仓失败（{e}），切换 JoinQuant")
+                log_info(f"⚠️ Tushare 持仓失败（{e}）")
 
-    # ── 补充：JoinQuant 前十大股东（免费，季度）──
-    jq_user = st.secrets.get("JQ_USERNAME")
-    jq_pass = st.secrets.get("JQ_PASSWORD")
-
-    if jq_user and jq_pass:
-        try:
-            import jqdatasdk as jq
-            jq.auth(jq_user, jq_pass)
-
-            from jqdatasdk import finance, query
-            df = finance.run_query(
-                query(finance.STK_HOLDER_PERCENTAGE)
-                .filter(finance.STK_HOLDER_PERCENTAGE.code == jq_code)
-                .order_by(finance.STK_HOLDER_PERCENTAGE.period.desc())
-                .limit(10)
-            )
-
-            if df is not None and not df.empty:
-                # 字段校验：不同版本字段名可能不同
-                expected = {"shareholder_name", "period", "holding_amount", "holding_ratio"}
-                missing = expected - set(df.columns)
-                if missing:
-                    log_info(f"⚠️ JoinQuant 字段缺失：{missing}，显示原始数据")
+    # ── 补充：JoinQuant（当前免费版不含 finance 表，已关闭）──
+    if ENABLE_JQDATA_HOLDINGS:
+        jq_user = st.secrets.get("JQ_USERNAME")
+        jq_pass = st.secrets.get("JQ_PASSWORD")
+        if jq_user and jq_pass:
+            try:
+                import jqdatasdk as jq
+                jq.auth(jq_user, jq_pass)
+                from jqdatasdk import finance, query
+                jq_code = stock_code + ".XSHG" if stock_code.startswith("6") else stock_code + ".XSHE"
+                df = finance.run_query(
+                    query(finance.STK_HOLDER_PERCENTAGE)
+                    .filter(finance.STK_HOLDER_PERCENTAGE.code == jq_code)
+                    .order_by(finance.STK_HOLDER_PERCENTAGE.period.desc())
+                    .limit(10)
+                )
+                if df is not None and not df.empty:
+                    expected = {"shareholder_name", "period", "holding_amount", "holding_ratio"}
+                    if not (expected - set(df.columns)):
+                        df = df.rename(columns={
+                            "shareholder_name": "股东名称", "period": "报告期",
+                            "holding_amount": "持股数量", "holding_ratio": "持股比例%",
+                        })
+                        keep = [c for c in ["股东名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
+                        return df[keep], "JoinQuant 前十大股东（季报）"
                     return df.head(10), "JoinQuant 前十大股东（季报）"
-                df = df.rename(columns={
-                    "shareholder_name": "股东名称",
-                    "period":           "报告期",
-                    "holding_amount":   "持股数量",
-                    "holding_ratio":    "持股比例%",
-                })
-                keep = [c for c in ["股东名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
-                return df[keep], "JoinQuant 前十大股东（季报）"
+            except Exception as e:
+                log_info(f"⚠️ JoinQuant 持仓失败（{e}）")
 
-        except Exception as e:
-            log_info(f"⚠️ JoinQuant 持仓失败（{e}）")
-
-    return None, "⚠️ 持仓数据暂不可用"
+    return None, "⚠️ 持仓数据暂不可用（当前环境数据源限制）"
 
 
 # ===== 星级评级 =====
