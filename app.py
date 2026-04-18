@@ -41,11 +41,39 @@ def log_info(msg):
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+st.set_page_config(layout="wide")
+
 st.title("📊 AI股票分析系统（专业版）")
-st.caption("版本：V4.2")
+st.caption("版本：V4.6")
 
 st.markdown("""
 ### 📢 更新日志
+- V4.6：UI 压缩重构
+  - 标题栏加星级评级（1-5星，自动由综合评分生成）
+  - 四维评分条（技术/资金/情绪/多因子）+ progress bar
+  - K线与成交量合并为双排子图（共享X轴）
+  - 持仓结构表格升级为饼图（列名自动识别，无法识别时降级表格）
+  - 机构评级压缩为买入/中性/卖出统计 + 原始表格
+  - 交易信号高亮（红=买入，绿=卖出，橙=观望）
+  - 修正情绪评分公式（RSI区间映射，强势区高分）
+  - 修正 A股颜色惯例（红涨绿跌）
+- V4.5：评分体系完整化
+  - 机构评级加成（±10）：买入+2/增持+2/减持-3/卖出-5，纳入最终评分
+  - 启动信号加成：有效突破+5，假突破-8，纳入最终评分
+  - 评分链完整：技术×0.6 + 多因子×0.4 → 资金修正 → 机构加成 → 启动加成 → 最终分
+  - 持仓结构仅展示（列名不稳定，不可靠评分）
+  - UI 新增评分加成明细展示
+- V4.4：新增机构数据接口
+  - 机构评级：Tushare report_rc 主接口（需2000+积分），降级 AKShare 东方财富评级
+  - 持仓结构：Tushare top_inst 主接口（需较高积分），降级 AKShare 季度持仓
+  - 积分不足时自动降级并提示，不影响其他功能
+- V4.3：可视化界面升级
+  - 新增 K线图（叠加MA5/MA10/MA20）
+  - 新增成交量红绿柱图
+  - 新增 RSI 曲线（含70/30阈值线）
+  - 新增四宫格评分卡片
+  - 新增三栏信息区（技术/资金/决策）
+  - 宽屏布局
 - V4.2：多因子评分融合
   - 新增 multi_factor_score：五维评分（趋势/资金稳定性/机构模拟/波动率/情绪）
   - 最终评分 = base_score×0.6 + mf_score×0.4，再经 unified_decision 修正
@@ -913,6 +941,123 @@ def explain_trade_logic(score, money_score, rsi):
 
     return text
 
+# ===== 机构评级（Tushare主 + AKShare备）=====
+def get_institution_ratings(stock_code):
+    token = st.secrets.get("TUSHARE_TOKEN")
+
+    # ── 主：Tushare report_rc（需2000+积分）──
+    if token:
+        try:
+            import tushare as ts
+            ts.set_token(token)
+            pro = ts.pro_api()
+            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+            df = pro.report_rc(
+                ts_code=ts_code,
+                fields="report_date,brokerage,analyst,rating,rating_change"
+            )
+            if df is not None and not df.empty:
+                df = df.head(8).rename(columns={
+                    "report_date": "日期", "brokerage": "机构",
+                    "analyst": "分析师", "rating": "评级", "rating_change": "变动"
+                })
+                return df, "Tushare"
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
+                log_info("⚠️ Tushare 机构评级积分不足，切换 AKShare")
+            else:
+                log_info(f"⚠️ Tushare 机构评级异常（{e}），切换 AKShare")
+
+    # ── 备：AKShare 东方财富分析师评级（免费）──
+    try:
+        import akshare as ak
+        df = ak.stock_analyst_rating_em(symbol=stock_code)
+        if df is not None and not df.empty:
+            return df.head(8), "AKShare"
+    except Exception as e:
+        return None, f"❌ 机构评级获取失败：{translate_error(e)}"
+
+    return None, "❌ 暂无机构评级数据"
+
+
+# ===== 持仓结构（Tushare主 + AKShare备，季度级）=====
+def get_holding_structure(stock_code):
+    token = st.secrets.get("TUSHARE_TOKEN")
+
+    # ── 主：Tushare top_inst（需较高积分）──
+    if token:
+        try:
+            import tushare as ts
+            ts.set_token(token)
+            pro = ts.pro_api()
+            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+            df = pro.top_inst(ts_code=ts_code)
+            if df is not None and not df.empty:
+                return df.head(10), "Tushare"
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
+                log_info("⚠️ Tushare 持仓积分不足，切换 AKShare")
+            else:
+                log_info(f"⚠️ Tushare 持仓异常（{e}），切换 AKShare")
+
+    # ── 备：AKShare 机构持仓（免费，季度更新）──
+    try:
+        import akshare as ak
+        # 推算最近已披露的季度
+        now = datetime.now()
+        m = now.month
+        y = now.year
+        if m <= 3:
+            quarter = f"{y-1}1231"
+        elif m <= 6:
+            quarter = f"{y}0331"
+        elif m <= 9:
+            quarter = f"{y}0630"
+        else:
+            quarter = f"{y}0930"
+
+        df = ak.stock_institute_hold_detail(symbol=stock_code, end_period=quarter)
+        if df is not None and not df.empty:
+            label = f"AKShare（{quarter[:4]}年{quarter[4:6]}月季报，非实时）"
+            return df.head(10), label
+    except Exception as e:
+        return None, f"❌ 持仓结构获取失败：{translate_error(e)}"
+
+    return None, "❌ 暂无持仓数据"
+
+
+# ===== 星级评级 =====
+def score_to_stars(score):
+    if score >= 85:
+        return "⭐⭐⭐⭐⭐"
+    elif score >= 75:
+        return "⭐⭐⭐⭐"
+    elif score >= 65:
+        return "⭐⭐⭐"
+    elif score >= 55:
+        return "⭐⭐"
+    else:
+        return "⭐"
+
+# ===== 情绪评分（RSI区间映射）=====
+def calc_emotion_score(rsi):
+    if rsi is None or pd.isna(rsi):
+        return 50          # 数据不足，给中性分
+    if 50 <= rsi < 70:
+        return 80          # 偏强健康区
+    elif 70 <= rsi < 80:
+        return 60          # 偏热，注意风险
+    elif rsi >= 80:
+        return 30          # 超买，风险高
+    elif 40 <= rsi < 50:
+        return 60          # 偏弱但尚可
+    elif 30 <= rsi < 40:
+        return 40          # 偏弱
+    else:
+        return 20          # 超卖，极端弱势
+
 # ===== 复盘系统（修复版）=====
 def check_performance():
     file = "records.csv"
@@ -1067,13 +1212,13 @@ if st.button("开始分析"):
                 df, price, low_20, high_20, mode_type
             )
 
-            # ===== 第2步：多因子评分（新增）=====
+            # ===== 第2步：多因子评分 =====
             mf_score = multi_factor_score(df)
 
             # ===== 第3步：融合评分 =====
             combined_score = int(base_score * 0.6 + mf_score * 0.4)
 
-            # ===== 第4步：启动识别（仅用于展示，不再影响评分）=====
+            # ===== 第4步：启动识别 =====
             start_signal, start_level, start_strength = detect_start_signal(df)
 
             # ===== 第5步：统一决策（资金阶段为主裁判）=====
@@ -1081,15 +1226,51 @@ if st.button("开始分析"):
                 df, combined_score, money_state, money_score
             )
 
-            # ===== 第6步：生成交易信号 =====
+            # ===== 第6步：机构评级（先取数，再计算加成）=====
+            ratings_df, ratings_src = get_institution_ratings(stock_code)
+
+            # 机构评级加成（最高±10分）
+            ratings_bonus = 0
+            if ratings_df is not None and not ratings_df.empty:
+                rating_col = next(
+                    (c for c in ["评级", "rating", "最新评级"] if c in ratings_df.columns), None
+                )
+                if rating_col:
+                    for r in ratings_df[rating_col].dropna().head(6):
+                        r = str(r)
+                        if any(k in r for k in ["强烈买入", "强买"]):
+                            ratings_bonus += 3
+                        elif any(k in r for k in ["买入", "增持", "推荐"]):
+                            ratings_bonus += 2
+                        elif any(k in r for k in ["减持", "看空"]):
+                            ratings_bonus -= 3
+                        elif any(k in r for k in ["卖出"]):
+                            ratings_bonus -= 5
+                    ratings_bonus = max(-10, min(10, ratings_bonus))
+
+            # ===== 第7步：启动信号加成（假突破惩罚 / 有效突破奖励）=====
+            if "假突破" in start_signal:
+                start_bonus = -8
+            elif "有效突破" in start_signal:
+                start_bonus = 5
+            else:
+                start_bonus = 0
+
+            # ===== 第8步：最终评分修正（所有维度汇总）=====
+            final_score = max(0, min(100, final_score + ratings_bonus + start_bonus))
+
+            # ===== 第9步：生成交易信号 =====
             final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
                 df, final_score, money_score
             )
             trade_logic = explain_trade_logic(final_score, money_score, latest['RSI'])
 
-            # ===== 第7步：移动止损更新 =====
+            # ===== 第10步：移动止损更新 =====
             if stop_loss is not None:
                 stop_loss = update_trailing_stop(stock_code, stop_loss)
+
+            # ===== 第11步：持仓结构（仅展示，不计分）=====
+            holdings_df, holdings_src = get_holding_structure(stock_code)
 
             # ===== GPT分析（完整 + 热点判断）=====
             prompt = f"""
@@ -1138,6 +1319,8 @@ J={latest['J']:.2f}
 【系统评分】
 基础评分：{base_score}/100
 多因子评分：{mf_score}/100
+机构评级加成：{ratings_bonus:+d}
+启动信号加成：{start_bonus:+d}
 融合评分：{final_score}/100
 当前阶段：{phase}
 
@@ -1226,32 +1409,187 @@ J={latest['J']:.2f}
             else:
                 hot_flag = "❄️ 非热点"
 
-            # ===== 页面输出 =====
+            # ===== 页面输出（V4.6 压缩版）=====
+            import plotly.graph_objects as go
+            import plotly.express as px
+            import plotly.subplots as sp
+
             st.success("✅ 分析完成")
 
-            st.subheader(f"📈 {stock_name}（{stock_code}）")
+            # ===== 标题 + 星级 =====
+            prev_close = df['收盘'].iloc[-2] if len(df) > 1 else price
+            chg = (price - prev_close) / prev_close * 100
+            chg_str = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
+            chg_color = "red" if chg >= 0 else "green"
+            stars = score_to_stars(final_score)
 
-            st.subheader("📊 核心数据")
-            # ===== 启动信号展示 =====
-            st.subheader("🚀 启动识别")
-            st.write(f"启动信号：{start_signal}")
-            st.write(f"启动等级：{start_level}")
-            st.write(f"启动强度：{start_strength}/100")
-            st.subheader("💰 主力资金行为")
-            st.write(f"主力状态：{money_state}")
-            st.write(f"资金强度：{money_score}/100")
-            st.info(money_explain)
-            st.write(f"当前价格：{price}")
-            st.write(f"短线趋势：{short_trend}")
-            st.write(f"波段趋势：{mid_trend}")
-            st.write(f"基础评分：{base_score}/100")
-            st.write(f"多因子评分：{mf_score}/100")
-            st.write(f"融合评分：{final_score}/100")
-            st.write(f"当前阶段：{phase}")
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📊 {stock_name}（{stock_code}）")
+                st.markdown(f"{stars}")
+            with c2:
+                st.markdown(
+                    f"### {price:.2f} &nbsp;<span style='color:{chg_color}'>{chg_str}</span>",
+                    unsafe_allow_html=True
+                )
+            with c3:
+                st.caption(f"阶段：{phase}  |  {hot_flag}")
 
-            # ⭐ 热点展示
-            st.write(f"市场定位：{hot_flag}")
+            # ===== 四维评分条 =====
+            st.markdown("### 📊 核心评分")
+            emotion_score = calc_emotion_score(latest['RSI'])
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("技术", f"{base_score}/100")
+            k1.progress(base_score / 100)
+            k2.metric("资金", f"{money_score}/100", money_state)
+            k2.progress(money_score / 100)
+            k3.metric("情绪", f"{emotion_score}/100")
+            k3.progress(emotion_score / 100)
+            k4.metric("多因子", f"{mf_score}/100")
+            k4.progress(mf_score / 100)
 
+            # 评分加成明细
+            bonus_parts = []
+            if ratings_bonus != 0:
+                bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
+            if start_bonus != 0:
+                bonus_parts.append(f"启动信号 {start_bonus:+d}")
+            st.caption(
+                f"综合评分：{final_score}/100"
+                + (f"  |  加成：{'，'.join(bonus_parts)}" if bonus_parts else "")
+            )
+
+            # ===== K线 + 成交量（合并子图）=====
+            chart_df = df.copy()
+            chart_df["日期"] = pd.to_datetime(chart_df["日期"])
+
+            fig = sp.make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                row_heights=[0.72, 0.28],
+                vertical_spacing=0.02
+            )
+            fig.add_trace(go.Candlestick(
+                x=chart_df["日期"],
+                open=chart_df["开盘"], high=chart_df["最高"],
+                low=chart_df["最低"], close=chart_df["收盘"],
+                name="K线"
+            ), row=1, col=1)
+            for ma, color in [("MA5", "#f97316"), ("MA10", "#38bdf8"), ("MA20", "#a78bfa")]:
+                if ma in chart_df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=chart_df["日期"], y=chart_df[ma],
+                        mode="lines", name=ma, line=dict(width=1, color=color)
+                    ), row=1, col=1)
+            vol_colors = ["#ef4444" if c >= o else "#10b981"
+                          for c, o in zip(chart_df["收盘"], chart_df["开盘"])]
+            fig.add_trace(go.Bar(
+                x=chart_df["日期"], y=chart_df["成交量"],
+                marker_color=vol_colors, name="成交量"
+            ), row=2, col=1)
+            fig.update_layout(
+                height=500, showlegend=True,
+                xaxis_rangeslider_visible=False,
+                legend=dict(orientation="h", y=1.02),
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ===== RSI 曲线 =====
+            if "RSI" in chart_df.columns:
+                rsi_df = chart_df.tail(120)
+                fig_rsi = go.Figure()
+                fig_rsi.add_trace(go.Scatter(
+                    x=rsi_df["日期"], y=rsi_df["RSI"],
+                    mode="lines", name="RSI", line=dict(color="#38bdf8")
+                ))
+                fig_rsi.add_hline(y=70, line_dash="dash", line_color="red",
+                                  annotation_text="超买70")
+                fig_rsi.add_hline(y=30, line_dash="dash", line_color="green",
+                                  annotation_text="超卖30")
+                fig_rsi.update_layout(
+                    title="RSI指标", height=220,
+                    margin=dict(l=10, r=10, t=40, b=10)
+                )
+                st.plotly_chart(fig_rsi, use_container_width=True)
+
+            # ===== 持仓结构饼图 =====
+            st.subheader("🗂️ 机构持仓结构")
+            if holdings_df is not None:
+                st.caption(f"数据来源：{holdings_src}")
+                col_name = next(
+                    (c for c in holdings_df.columns if "机构" in c or "holder" in c.lower()), None
+                )
+                col_val = next(
+                    (c for c in holdings_df.columns if "持股" in c or "数量" in c or "share" in c.lower()), None
+                )
+                if col_name and col_val:
+                    fig_pie = px.pie(
+                        holdings_df.head(6),
+                        names=col_name, values=col_val,
+                        title="机构持仓结构（前6）"
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.dataframe(holdings_df, use_container_width=True, hide_index=True)
+            else:
+                st.warning(holdings_src)
+
+            # ===== 机构评级（压缩统计）=====
+            st.subheader("🏦 机构评级")
+            if ratings_df is not None and not ratings_df.empty:
+                st.caption(f"数据来源：{ratings_src}")
+                rating_col = next(
+                    (c for c in ratings_df.columns if "评级" in c or "rating" in c.lower()), None
+                )
+                if rating_col:
+                    buy_cnt  = int(ratings_df[rating_col].astype(str).str.contains("买入|增持|推荐").sum())
+                    sell_cnt = int(ratings_df[rating_col].astype(str).str.contains("卖出|减持").sum())
+                    hold_cnt = len(ratings_df) - buy_cnt - sell_cnt
+                    r1, r2, r3 = st.columns(3)
+                    r1.metric("🟢 买入/增持", buy_cnt)
+                    r2.metric("🟡 中性/持有", hold_cnt)
+                    r3.metric("🔴 卖出/减持", sell_cnt)
+                st.dataframe(ratings_df, use_container_width=True, hide_index=True)
+            else:
+                st.warning(ratings_src)
+
+            # ===== 交易信号（高亮）=====
+            signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
+            st.markdown(
+                f"## 🎯 交易信号：<span style='color:{signal_color}'>"
+                f"{final_signal}{'（' + buy_tag + '）' if buy_tag else ''}</span>",
+                unsafe_allow_html=True
+            )
+            sc1, sc2, sc3 = st.columns(3)
+            if buy_price:
+                sc1.metric("建议买点", buy_price)
+            if stop_loss:
+                sc2.metric("止损位", stop_loss)
+            if take_profit:
+                sc3.metric("止盈位", take_profit)
+
+            # ===== 三栏辅助信息 =====
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.subheader("📊 技术面")
+                st.write(f"短线趋势：{short_trend}")
+                st.write(f"波段趋势：{mid_trend}")
+                st.write(f"启动信号：{start_signal}（{start_level}，强度 {start_strength}/100）")
+            with col2:
+                st.subheader("💰 资金面")
+                st.write(f"主力状态：{money_state}")
+                st.write(f"资金强度：{money_score}/100")
+                st.info(money_explain)
+            with col3:
+                st.subheader("📌 评分说明")
+                st.write(f"基础技术：{base_score}/100")
+                st.write(f"多因子：{mf_score}/100")
+                st.write(f"机构加成：{ratings_bonus:+d}")
+                st.write(f"启动加成：{start_bonus:+d}")
+                st.write(f"最终：{final_score}/100")
+
+            # ===== AI分析报告 =====
             st.subheader("📊 AI分析报告")
             st.write(result)
 
