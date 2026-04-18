@@ -109,7 +109,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.1</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.3</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -430,14 +430,7 @@ def get_stock_pool():
 
         df = df[~df['name'].str.contains('ST')]
 
-        df = df.head(500)
-
-        stock_list = []
-
-        for ts_code in df['ts_code']:
-            code = ts_code.split('.')[0]
-            stock_list.append(code)
-
+        stock_list = [ts_code.split('.')[0] for ts_code in df['ts_code']]
         return stock_list
 
     except:
@@ -472,17 +465,28 @@ def filter_stocks(df):
 def auto_select_stocks(stock_list, mode_type):
     results = []
 
-    stock_list = stock_list[:100]
+    # 最多分析300支
+    stock_list = stock_list[:300]
+    total = len(stock_list)
+
+    progress = st.progress(0, text="准备中...")
+    status   = st.empty()
+    result_placeholder = st.empty()
 
     last_call_time = 0
 
-    for stock_code in stock_list:
+    for idx, stock_code in enumerate(stock_list):
         try:
+            progress.progress((idx + 1) / total,
+                              text=f"分析中 {idx+1}/{total}：{stock_code}")
+            status.caption(f"已筛选到 {len(results)} 支候选股")
+
             now = time.time()
             wait = 0.5 - (now - last_call_time)
             if wait > 0:
                 time.sleep(wait)
             last_call_time = time.time()
+
             df, stock_name = get_stock_data(stock_code)
 
             if df is None or df.empty:
@@ -498,7 +502,7 @@ def auto_select_stocks(stock_list, mode_type):
 
             money_state, money_score = detect_money_flow(df)
 
-            low_20 = df['最低'].tail(20).min()
+            low_20  = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
 
             score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
@@ -506,23 +510,28 @@ def auto_select_stocks(stock_list, mode_type):
             )
 
             results.append({
-                "股票": stock_name,
-                "代码": stock_code,
-                "价格": price,
-                "RSI": round(latest['RSI'], 2),
+                "股票":   stock_name,
+                "代码":   stock_code,
+                "价格":   price,
+                "RSI":    round(latest['RSI'], 2),
                 "总评分": score,
-                "趋势分": trend_s,
-                "动量分": momentum_s,
-                "位置分": pos_s,
-                "资金分": vol_s,
-                "模式": "趋势" if mode_type == "trend" else "低吸"
+                "资金状态": money_state,
             })
 
+            # 每找到一支就实时更新表格
+            if results:
+                result_placeholder.dataframe(
+                    pd.DataFrame(results).sort_values("总评分", ascending=False),
+                    hide_index=True
+                )
+
         except Exception as e:
-            log_error(f"❌ 自动选股异常（{stock_code}）：{translate_error(e)}")
+            log_info(f"⚠️ 自动选股跳过（{stock_code}）：{translate_error(e)}")
+
+    progress.empty()
+    status.empty()
 
     df_result = pd.DataFrame(results)
-
     if df_result.empty:
         return None
 
@@ -1791,9 +1800,10 @@ with tab_select:
             df_select = auto_select_stocks(stock_list, mode_type)
 
             if df_select is not None:
-                st.dataframe(df_select)
+                st.success(f"✅ 完成，共筛出 {len(df_select)} 支候选股")
+                st.dataframe(df_select, hide_index=True)
             else:
-                st.write("暂无结果")
+                st.info("本次未筛选出符合条件的股票")
 
         except Exception as e:
             log_error(f"❌ 自动选股异常：{translate_error(e)}")
