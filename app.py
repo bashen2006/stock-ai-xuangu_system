@@ -1,4 +1,6 @@
 import os
+import base64
+import requests as _requests
 from datetime import datetime
 import streamlit as st
 import pandas as pd
@@ -8,6 +10,54 @@ from openai import OpenAI
 # 统一用绝对路径，避免 Streamlit Cloud 工作目录不一致
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_FILE = os.path.join(_BASE_DIR, "run.log")
+_RECORDS_FILE = os.path.join(_BASE_DIR, "records.csv")
+
+# ===== GitHub 持久化：records.csv ↔ GitHub 仓库 =====
+def _gh_headers():
+    token = st.secrets.get("GITHUB_TOKEN")
+    return {"Authorization": f"token {token}"} if token else None
+
+def _gh_api_url():
+    repo = st.secrets.get("GITHUB_REPO")
+    return f"https://api.github.com/repos/{repo}/contents/records.csv" if repo else None
+
+def pull_records_from_github():
+    """启动时从 GitHub 拉取 records.csv（如果本地不存在）"""
+    if os.path.exists(_RECORDS_FILE):
+        return
+    headers = _gh_headers()
+    url = _gh_api_url()
+    if not headers or not url:
+        return
+    try:
+        r = _requests.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            content = base64.b64decode(r.json()["content"])
+            with open(_RECORDS_FILE, "wb") as f:
+                f.write(content)
+            log_info("✅ 从 GitHub 恢复 records.csv")
+    except Exception as e:
+        log_info(f"⚠️ 从 GitHub 拉取 records.csv 失败（{e}）")
+
+def push_records_to_github():
+    """写入记录后同步推送到 GitHub"""
+    headers = _gh_headers()
+    url = _gh_api_url()
+    if not headers or not url:
+        return
+    try:
+        with open(_RECORDS_FILE, "rb") as f:
+            content = base64.b64encode(f.read()).decode()
+        # 获取当前文件 SHA（更新时必须）
+        r = _requests.get(url, headers=headers, timeout=8)
+        sha = r.json().get("sha") if r.status_code == 200 else None
+        payload = {"message": "update records.csv", "content": content, "branch": "main"}
+        if sha:
+            payload["sha"] = sha
+        _requests.put(url, headers=headers, json=payload, timeout=10)
+        log_info("✅ records.csv 已同步到 GitHub")
+    except Exception as e:
+        log_info(f"⚠️ 同步 records.csv 到 GitHub 失败（{e}）")
 
 # ===== 错误翻译（英文 → 中文）=====
 def translate_error(e):
@@ -51,12 +101,15 @@ ENABLE_AKSHARE = False
 # JoinQuant 免费版不包含 finance 表，关闭避免无效调用
 ENABLE_JQDATA_HOLDINGS = False
 
+# 启动时从 GitHub 恢复 records.csv（如本地不存在）
+pull_records_from_github()
+
 st.set_page_config(layout="wide")
 
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V5.9</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.1</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -162,7 +215,7 @@ with st.sidebar:
 
 # ===== 保存记录 =====
 def save_record(stock_code, price, short_trend, mid_trend, score, advice):
-    file = "records.csv"
+    file = _RECORDS_FILE
 
     data = {
         "时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -183,6 +236,8 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
         df_all = df_new
 
     df_all.to_csv(file, index=False)
+    # 同步到 GitHub，确保重新部署后数据不丢失
+    push_records_to_github()
 
 # ===== 缓存函数 =====
 def load_cache(stock_code):
@@ -1108,95 +1163,101 @@ def calc_emotion_score(rsi):
 
 # ===== 复盘系统（修复版）=====
 def check_performance():
-    file = "records.csv"
-
-    if not os.path.exists(file):
+    if not os.path.exists(_RECORDS_FILE):
+        log_info("⚠️ 复盘：records.csv 不存在，本次会话尚未有分析记录")
         return None
 
-    df = pd.read_csv(file)
+    df = pd.read_csv(_RECORDS_FILE)
+    if df.empty:
+        log_info("⚠️ 复盘：records.csv 为空")
+        return pd.DataFrame()
+
+    log_info(f"📋 复盘：读取到 {len(df)} 条记录，开始获取最新价格")
+
+    # 每次最多处理最近30条，避免大量 Tushare 请求被限流
+    MAX_RECORDS = 30
+    if len(df) > MAX_RECORDS:
+        st.info(f"⚠️ 共有 {len(df)} 条记录，本次只复盘最近 {MAX_RECORDS} 条（避免接口限流）")
+        df = df.tail(MAX_RECORDS)
+
     results = []
+    progress = st.progress(0, text="正在获取最新价格...")
 
-    import tushare as ts
-    ts.set_token(st.secrets["TUSHARE_TOKEN"])
-    pro = ts.pro_api()
+    try:
+        import tushare as ts
+        ts.set_token(st.secrets["TUSHARE_TOKEN"])
+        pro = ts.pro_api()
+    except Exception as e:
+        log_info(f"⚠️ 复盘：Tushare 初始化失败（{e}），将展示无最新价格的记录")
+        pro = None
 
-    for index, row in df.iterrows():
-        stock = row["股票"]
+    for idx, (index, row) in enumerate(df.iterrows()):
+        progress.progress((idx + 1) / len(df), text=f"正在处理 {idx+1}/{len(df)}...")
+        stock = str(row["股票"]).strip()
         old_price = row["价格"]
-        advice = row["建议"]
+        advice = row.get("建议", "未知")
         record_time = row["时间"]
 
+        current_price = None
+        profit = None
+        drawdown = None
+        result = "⚠️ 观察中"
+        summary = "暂无"
+
+        # 尝试获取最新价格
+        if pro is not None:
+            try:
+                ts_code = stock + ".SH" if stock.startswith("6") else stock + ".SZ"
+                df_new = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
+                time.sleep(0.5)  # 限流保护
+
+                if df_new is not None and not df_new.empty:
+                    df_new = df_new.sort_values("trade_date")
+                    current_price = df_new.iloc[-1]['close']
+                    min_price = df_new['low'].min()
+                    drawdown = round((min_price - old_price) / old_price * 100, 2)
+                    profit = round((current_price - old_price) / old_price * 100, 2)
+
+                    if profit > 0:
+                        result = "✅ 盈利"
+                    elif drawdown < -5:
+                        result = "❌ 止损失败"
+                    else:
+                        result = "⚠️ 观察中"
+
+                    if "❌" in result:
+                        try:
+                            prompt = f"""股票{stock}，买入价{old_price}，现价{current_price}，跌幅{drawdown}%。请简要分析错误原因并给出改进建议（100字以内）。"""
+                            response = client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[{"role": "user", "content": prompt}]
+                            )
+                            summary = response.choices[0].message.content
+                        except:
+                            summary = "AI分析失败"
+            except Exception as e:
+                log_info(f"⚠️ 复盘：获取 {stock} 最新价格失败（{e}）")
+
         try:
-            ts_code = stock + ".SH" if stock.startswith("6") else stock + ".SZ"
-
-            df_new = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
-            time.sleep(0.3)  # Tushare 频率限制
-
-            if df_new is None or df_new.empty:
-                continue
-
-            df_new = df_new.sort_values("trade_date")
-            current_price = df_new.iloc[-1]['close']
-
-            # ===== 时间差 =====
             days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
-
-            # ===== 最大回撤 =====
-            min_price = df_new['low'].min()
-            drawdown = (min_price - old_price) / old_price * 100
-
-            # ===== 收益 =====
-            profit = (current_price - old_price) / old_price * 100
-
-            # ===== 判断逻辑 =====
-            if profit > 0:
-                result = "✅ 正确"
-            elif drawdown < -5:
-                result = "❌ 止损失败"
-            else:
-                result = "⚠️ 观察中"
-
-            # ===== AI分析错误 =====
-            summary = "暂无"
-
-            if "❌" in result:
-                prompt = f"""
-股票：{stock}
-当时价格：{old_price}
-当前价格：{current_price}
-跌幅：{drawdown:.2f}%
-
-请分析判断错误的原因：
-1. 是否趋势判断错误
-2. 是否买点过高
-3. 是否指标失效
-4. 下次如何改进
-"""
-
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    summary = response.choices[0].message.content
-                except:
-                    summary = "AI分析失败"
-
-            results.append({
-                "股票": stock,
-                "天数": days,
-                "当时价格": old_price,
-                "当前价格": current_price,
-                "收益%": round(profit, 2),
-                "最大回撤%": round(drawdown, 2),
-                "建议": advice,
-                "结果": result,
-                "AI总结": summary
-            })
-
         except:
-            continue
+            days = "-"
 
+        results.append({
+            "股票": stock,
+            "记录时间": record_time,
+            "持有天数": days,
+            "买入价": old_price,
+            "当前价": current_price if current_price else "—",
+            "收益%": profit if profit is not None else "—",
+            "最大回撤%": drawdown if drawdown is not None else "—",
+            "建议": advice,
+            "结果": result,
+            "AI总结": summary
+        })
+
+    progress.empty()  # 清除进度条
+    log_info(f"✅ 复盘完成，共 {len(results)} 条")
     return pd.DataFrame(results)
 
 # ===== 执行控制状态初始化 =====
@@ -1744,18 +1805,26 @@ with tab_select:
 # Tab 3：历史复盘
 # ══════════════════════════════════════════════
 with tab_review:
+    st.caption("每次点击「开始分析」后会自动保存记录，复盘数据在当次部署会话内有效")
     if st.button("查看预测结果", key="btn_review"):
         df_result = check_performance()
 
-        if df_result is not None:
-            st.dataframe(df_result)
+        if df_result is None:
+            st.info("📭 本次会话还没有分析记录。请先在「单股分析」里分析几只股票，记录会自动保存。")
+        elif df_result.empty:
+            st.info("📭 记录文件存在但内容为空。")
+        else:
+            st.dataframe(df_result, width='stretch', hide_index=True)
             st.markdown(
-                '<div style="font-size:18px;font-weight:700;margin:12px 0 6px">📊 统计分析</div>',
+                '<div style="font-size:18px;font-weight:700;margin:12px 0 6px">📊 统计</div>',
                 unsafe_allow_html=True
             )
-            if not df_result.empty and "结果" in df_result.columns:
-                correct = len(df_result[df_result["结果"] == "✅ 正确"])
-                total = len(df_result)
-                st.write(f"正确率：{correct}/{total}")
-        else:
-            st.write("暂无复盘数据")
+            total = len(df_result)
+            profit_cnt = len(df_result[df_result["结果"] == "✅ 盈利"])
+            loss_cnt   = len(df_result[df_result["结果"] == "❌ 止损失败"])
+            watch_cnt  = len(df_result[df_result["结果"] == "⚠️ 观察中"])
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("共记录", total)
+            c2.metric("✅ 盈利", profit_cnt)
+            c3.metric("⚠️ 观察中", watch_cnt)
+            c4.metric("❌ 止损失败", loss_cnt)
