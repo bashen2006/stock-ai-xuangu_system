@@ -1490,7 +1490,11 @@ J={latest['J']:.2f}
             fig.update_layout(
                 height=500, showlegend=True,
                 xaxis_rangeslider_visible=False,
-                legend=dict(orientation="h", y=1.02),
+                legend=dict(
+                    orientation="h", y=1.02,
+                    itemclick=False,
+                    itemdoubleclick=False
+                ),
                 margin=dict(l=10, r=10, t=40, b=10)
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -1511,7 +1515,8 @@ J={latest['J']:.2f}
                     title="RSI指标", height=220,
                     margin=dict(l=10, r=10, t=40, b=10)
                 )
-                st.plotly_chart(fig_rsi, use_container_width=True)
+                st.plotly_chart(fig_rsi, use_container_width=True,
+                                config={"staticPlot": True})
 
             # ===== 持仓结构饼图 =====
             st.subheader("🗂️ 机构持仓结构")
@@ -1529,7 +1534,8 @@ J={latest['J']:.2f}
                         names=col_name, values=col_val,
                         title="机构持仓结构（前6）"
                     )
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.plotly_chart(fig_pie, use_container_width=True,
+                                    config={"staticPlot": True})
                 else:
                     st.dataframe(holdings_df, use_container_width=True, hide_index=True)
             else:
