@@ -961,50 +961,39 @@ def explain_trade_logic(score, money_score, rsi):
 
     return text
 
-# ===== 机构评级（Tushare主 + AKShare备）=====
+# ===== 机构评级（Tushare，积分不足时提示）=====
 def get_institution_ratings(stock_code):
     token = st.secrets.get("TUSHARE_TOKEN")
 
-    # ── 主：Tushare report_rc（需2000+积分）──
-    if token:
-        try:
-            import tushare as ts
-            ts.set_token(token)
-            pro = ts.pro_api()
-            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
-            df = pro.report_rc(
-                ts_code=ts_code,
-                fields="report_date,brokerage,analyst,rating,rating_change"
-            )
-            if df is not None and not df.empty:
-                df = df.head(8).rename(columns={
-                    "report_date": "日期", "brokerage": "机构",
-                    "analyst": "分析师", "rating": "评级", "rating_change": "变动"
-                })
-                return df, "Tushare"
-        except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
-                log_info("⚠️ Tushare 机构评级积分不足，切换 AKShare")
-            else:
-                log_info(f"⚠️ Tushare 机构评级异常（{e}），切换 AKShare")
+    if not token:
+        return None, "⚠️ 未配置 TUSHARE_TOKEN，无法获取机构评级"
 
-    # ── 备：AKShare 东方财富分析师评级（免费）──
     try:
-        import akshare as ak
-        df = ak.stock_analyst_rating_em(symbol=stock_code)
+        import tushare as ts
+        ts.set_token(token)
+        pro = ts.pro_api()
+        ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+        df = pro.report_rc(
+            ts_code=ts_code,
+            fields="report_date,brokerage,analyst,rating,rating_change"
+        )
         if df is not None and not df.empty:
-            return df.head(8), "AKShare"
+            df = df.head(8).rename(columns={
+                "report_date": "日期", "brokerage": "机构",
+                "analyst": "分析师", "rating": "评级", "rating_change": "变动"
+            })
+            return df, "Tushare"
+        return None, "⚠️ Tushare 暂无该股票评级数据"
     except Exception as e:
+        msg = str(e)
+        if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
+            return None, "⚠️ Tushare 积分不足（机构评级需要2000+积分），暂时无法获取"
         return None, f"❌ 机构评级获取失败：{translate_error(e)}"
-
-    return None, "❌ 暂无机构评级数据"
 
 
 # ===== 持仓结构（Tushare主 + AKShare备，季度级）=====
 def get_holding_structure(stock_code):
 
-    # JoinQuant 股票代码格式
     jq_code = stock_code + ".XSHG" if stock_code.startswith("6") else stock_code + ".XSHE"
 
     # ── 主：JoinQuant（免费，季度数据）──
@@ -1032,14 +1021,12 @@ def get_holding_structure(stock_code):
                     "proportion":   "持股比例%",
                 })
                 keep = [c for c in ["机构名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
-                label = f"JoinQuant（季报，非实时）"
-                return df[keep], label
+                return df[keep], "JoinQuant（季报，非实时）"
+            return None, "⚠️ JoinQuant 暂无该股票持仓数据"
+
         except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ["账号", "密码", "auth", "login", "用户"]):
-                log_info("⚠️ JoinQuant 账号认证失败，切换 Tushare")
-            else:
-                log_info(f"⚠️ JoinQuant 持仓异常（{e}），切换 Tushare")
+            # 打印完整错误，方便排查
+            log_info(f"⚠️ JoinQuant 持仓失败（{e}），切换 Tushare")
     else:
         log_info("⚠️ 未配置 JQ_USERNAME / JQ_PASSWORD，跳过 JoinQuant")
 
@@ -1057,32 +1044,11 @@ def get_holding_structure(stock_code):
         except Exception as e:
             msg = str(e)
             if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
-                log_info("⚠️ Tushare 持仓积分不足，切换 AKShare")
+                log_info("⚠️ Tushare 持仓积分不足")
             else:
-                log_info(f"⚠️ Tushare 持仓异常（{e}），切换 AKShare")
+                log_info(f"⚠️ Tushare 持仓失败（{e}）")
 
-    # ── 末：AKShare（免费，季度更新）──
-    try:
-        import akshare as ak
-        now = datetime.now()
-        m, y = now.month, now.year
-        if m <= 3:
-            quarter = f"{y-1}1231"
-        elif m <= 6:
-            quarter = f"{y}0331"
-        elif m <= 9:
-            quarter = f"{y}0630"
-        else:
-            quarter = f"{y}0930"
-
-        df = ak.stock_institute_hold_detail(symbol=stock_code, end_period=quarter)
-        if df is not None and not df.empty:
-            label = f"AKShare（{quarter[:4]}年{quarter[4:6]}月季报，非实时）"
-            return df.head(10), label
-    except Exception as e:
-        return None, f"❌ 持仓结构获取失败：{translate_error(e)}"
-
-    return None, "❌ 暂无持仓数据（JQ/Tushare/AKShare 均不可用）"
+    return None, "⚠️ 持仓数据暂不可用（JoinQuant/Tushare 均未成功，请查看日志）"
 
 
 # ===== 星级评级 =====
