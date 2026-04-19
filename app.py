@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.4</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.6</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -349,16 +349,25 @@ def get_stock_data(stock_code):
         log_info(f"✔ 缓存命中：{stock_code}")
         cached_name = stock_code
         try:
-            with open(f"name_{stock_code}.txt", encoding="utf-8") as f:
+            with open(os.path.join(_BASE_DIR, f"name_{stock_code}.txt"), encoding="utf-8") as f:
                 cached_name = f.read().strip() or stock_code
         except:
             pass
-        return cache_df, cached_name
+        cached_industry = ''
+        try:
+            with open(os.path.join(_BASE_DIR, f"industry_{stock_code}.txt"), encoding="utf-8") as f:
+                cached_industry = f.read().strip()
+        except:
+            pass
+        # 把 industry 写到 get_stock_data 的外层变量里
+        # 用 nonlocal 方式不可行，改为返回三元组后在调用处拆包
+        return cache_df, cached_name, cached_industry
 
     # ===== 主接口：Tushare Pro =====
     token = st.secrets.get("TUSHARE_TOKEN")
     df = None
-    stock_name = stock_code
+    stock_name     = stock_code
+    stock_industry = ''
 
     if not token:
         log_info("⚠️ 未配置 TUSHARE_TOKEN，直接走备用接口")
@@ -391,10 +400,12 @@ def get_stock_data(stock_code):
                     df = df.dropna(subset=["日期"])
                     df = df.sort_values("日期").reset_index(drop=True)
                     try:
-                        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
-                        stock_name = basic.iloc[0]['name']
+                        basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name,industry')
+                        stock_name     = basic.iloc[0]['name']
+                        stock_industry = basic.iloc[0].get('industry', '')
                     except:
-                        stock_name = stock_code
+                        stock_name     = stock_code
+                        stock_industry = ''
                     log_info(f"✅ Tushare 获取成功：{stock_code}")
 
         except Exception as e:
@@ -437,7 +448,14 @@ def get_stock_data(stock_code):
             return None, None
 
     save_cache(stock_code, df, stock_name)
-    return df, stock_name
+    # 同时缓存行业信息
+    if stock_industry:
+        try:
+            with open(os.path.join(_BASE_DIR, f"industry_{stock_code}.txt"), "w", encoding="utf-8") as f:
+                f.write(stock_industry)
+        except:
+            pass
+    return df, stock_name, stock_industry
 
 # ===== 技术指标 =====
 def calculate_indicators(df):
@@ -571,7 +589,7 @@ def auto_select_stocks(stock_list, mode_type):
                 time.sleep(wait)
             last_call_time = time.time()
 
-            df, stock_name = get_stock_data(stock_code)
+            df, stock_name, stock_industry = get_stock_data(stock_code)
             if df is None or df.empty:
                 continue
 
@@ -1353,6 +1371,65 @@ def explain_trade_logic(score, money_score, rsi):
     return text
 
 # ===== 机构评级（Tushare，积分不足时提示）=====
+# ===== 市场热点（涨停板实时数据）=====
+def get_market_heat():
+    """
+    通过今日涨停板统计热点板块
+    返回 dict 或 None
+    """
+    try:
+        import tushare as ts
+        token = st.secrets.get("TUSHARE_TOKEN")
+        if not token:
+            return None
+        ts.set_token(token)
+        pro = ts.pro_api()
+
+        # 找最近有数据的交易日（最多往前找3天）
+        df_up = None
+        used_date = None
+        for days_back in range(0, 4):
+            try_date = (datetime.now() - pd.Timedelta(days=days_back)).strftime("%Y%m%d")
+            try:
+                tmp = pro.limit_list_d(trade_date=try_date, limit_type='U',
+                                       fields='ts_code,name,limit_times,industry')
+                if tmp is not None and not tmp.empty:
+                    df_up = tmp
+                    used_date = try_date
+                    break
+            except:
+                continue
+
+        if df_up is None:
+            return None
+
+        total_up = len(df_up)
+
+        # 热点板块统计（按 industry 分组）
+        hot_sectors = []
+        if 'industry' in df_up.columns and df_up['industry'].notna().any():
+            sector_cnt = (df_up['industry'].dropna()
+                          .value_counts().head(6))
+            hot_sectors = [f"{ind}（{cnt}家）" for ind, cnt in sector_cnt.items()]
+
+        # 连板股（limit_times > 1，最引人注目的题材）
+        continuous = []
+        if 'limit_times' in df_up.columns:
+            multi = df_up[df_up['limit_times'] > 1].sort_values('limit_times', ascending=False)
+            continuous = [f"{r['name']}（{int(r['limit_times'])}连板）"
+                          for _, r in multi.head(5).iterrows()]
+
+        return {
+            'date':       used_date,
+            'total_up':   total_up,
+            'hot_sectors': hot_sectors,
+            'continuous':  continuous,
+        }
+    except Exception as e:
+        log_info(f"⚠️ 市场热点获取失败：{e}")
+        return None
+
+
 def get_institution_ratings(stock_code):
     token = st.secrets.get("TUSHARE_TOKEN")
 
@@ -1606,7 +1683,7 @@ with tab_analyze:
                 st.write("🔍 分析中，请稍等...")
                 _prog = st.progress(0, text="正在获取行情数据...")
 
-                df, stock_name = get_stock_data(stock_code)
+                df, stock_name, stock_industry = get_stock_data(stock_code)
 
                 if df is None:
                     log_error("❌ 数据获取失败，请查看上方具体原因")
@@ -1696,7 +1773,9 @@ with tab_analyze:
                 holdings_df, holdings_src = get_holding_structure(stock_code)
 
                 # ===== GPT分析（完整 + 热点判断）=====
-                _prog.progress(90, text="AI 综合分析中...")
+                _prog.progress(90, text="AI 综合分析中（含热点数据）...")
+                # 获取市场热点（实时涨停板）
+                market_heat = get_market_heat()
                 prompt = f"""
     你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行"分析 + 交易决策"。
 
@@ -1797,8 +1876,22 @@ with tab_analyze:
     - 止盈目标：
 
     【9. 行业与热点分析】
-    所属行业是什么？
-    是否属于当前热点（AI / 半导体 / 新能源等）？
+    该股所属行业：{stock_industry or "未知"}
+
+    ===== 今日市场热点（真实涨停板数据）=====
+    {f"日期：{market_heat['date']}　涨停家数：{market_heat['total_up']}" if market_heat else "今日涨停数据暂未获取"}
+    {f"热点板块：{'、'.join(market_heat['hot_sectors'])}" if market_heat and market_heat['hot_sectors'] else ""}
+    {f"连板题材股：{'、'.join(market_heat['continuous'])}" if market_heat and market_heat['continuous'] else ""}
+
+    ===== 国际市场参考 =====
+    请结合你的知识，分析以下方面对当前A股的可能影响：
+    1. 近期美股（标普500/纳斯达克）走势与A股的联动关系（美股异动通常有0-1个交易日的A股滞后反应）
+    2. 近期重要国际事件（贸易政策、地缘政治、美联储动向）对相关行业板块的影响
+    3. 该股所在行业是否受国际因素直接影响（如半导体受美国出口管制、新能源受补贴政策等）
+
+    请综合以上数据，判断：
+    - 该股所在行业是否属于当前市场热点？
+    - 是否受到国际市场利好/利空影响？
 
     【10. 是否容易被套】
     说明在当前价格买入的风险
@@ -1835,24 +1928,28 @@ with tab_analyze:
                 elif "不建议" in result:
                     advice = "不建议"
 
-                # ===== 热点识别：只看第9项内容 =====
+                # ===== 热点识别：优先用真实涨停板数据 =====
                 import re as _re
                 hot_flag = "❄️ 非热点"
-                # 提取第9项到第10项之间的内容
-                section9_match = _re.search(r'【9[\.、．\s].*?】(.*?)(?:【10|$)', result, _re.DOTALL)
-                if section9_match:
-                    section9 = section9_match.group(1)
-                    # 第9项内容里只要出现"热点"且没有明确否定就判为热点
-                    if "热点" in section9 and not any(
-                        kw in section9 for kw in ["不属于", "非热点", "不是热点", "不属热点"]
-                    ):
-                        hot_flag = "🔥 热点股"
-                else:
-                    # 找不到第9项时降级为全文关键词判断
-                    if any(kw in result for kw in ["不属于热点", "非热点", "不是热点"]):
-                        hot_flag = "❄️ 非热点"
-                    elif any(kw in result for kw in ["处于热点", "主线热点", "属于热点", "热点行业"]):
-                        hot_flag = "🔥 热点股"
+
+                # 第一优先：比对股票行业和今日热点板块
+                if market_heat and market_heat['hot_sectors'] and stock_industry:
+                    for sector_str in market_heat['hot_sectors']:
+                        if stock_industry in sector_str:
+                            hot_flag = "🔥 热点股"
+                            break
+
+                # 第二优先：从 GPT 第9项内容判断（兜底）
+                if hot_flag == "❄️ 非热点":
+                    section9_match = _re.search(r'【9[\.、．\s].*?】(.*?)(?:【10|$)', result, _re.DOTALL)
+                    if section9_match:
+                        section9 = section9_match.group(1)
+                        cold_kw = ["不属于热点", "非热点", "不是热点", "不属于当前热点"]
+                        hot_kw  = ["属于热点", "处于热点", "主线热点", "热点板块", "热点行业",
+                                   "热门板块", "市场热点", "是热点"]
+                        if not any(k in section9 for k in cold_kw):
+                            if any(k in section9 for k in hot_kw):
+                                hot_flag = "🔥 热点股"
 
                 # ===== 页面输出（V4.7 压缩版）=====
                 import plotly.graph_objects as go
@@ -1981,7 +2078,7 @@ with tab_analyze:
                                             "displayModeBar": False})
 
                 # ===== 主力控盘（展示，不计分）=====
-                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🎯 主力控盘</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">🎯 主力控盘</div>', unsafe_allow_html=True)
                 phase_color = {"高度控盘":"#ef4444","中度控盘":"#f59e0b","弱控盘":"#38bdf8","无控盘":"#94a3b8"}.get(ctrl_phase,"#64748b")
                 ctrl_html = (
                     '<div style="display:flex;gap:10px;margin-bottom:6px">' +
@@ -1990,11 +2087,21 @@ with tab_analyze:
                     '</div>'
                 )
                 st.markdown(ctrl_html, unsafe_allow_html=True)
-                if ctrl_tags:
-                    st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">行为特征：{"　/　".join(ctrl_tags)}</div>', unsafe_allow_html=True)
+                ctrl_explain = {
+                    "高度控盘": "💡 主力资金高度介入，筹码集中，行情由主力主导，可重点关注",
+                    "中度控盘": "💡 主力有一定介入迹象，但控盘程度有限，需结合其他信号确认",
+                    "弱控盘":   "💡 主力迹象较弱，游资或散户主导，行情波动较大，注意风险",
+                    "无控盘":   "💡 暂未发现主力明显介入，建议观望或等待明显放量信号",
+                }.get(ctrl_phase, "")
+                tags_str = "　/　".join(ctrl_tags) if ctrl_tags else "无明显特征"
+                st.markdown(
+                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:4px">行为特征：{tags_str}</div>'
+                    f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{ctrl_explain}</div>',
+                    unsafe_allow_html=True
+                )
 
                 # ===== 洗盘 vs 出货（展示 + 已计入评分）=====
-                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">⚖️ 洗盘 vs 出货</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">⚖️ 洗盘 vs 出货</div>', unsafe_allow_html=True)
                 wd_color = {"洗盘":"#22c55e","出货":"#ef4444","中性":"#94a3b8"}.get(wd_decision,"#64748b")
                 wd_html = (
                     '<div style="display:flex;gap:10px;margin-bottom:6px">' +
@@ -2003,12 +2110,21 @@ with tab_analyze:
                     '</div>'
                 )
                 st.markdown(wd_html, unsafe_allow_html=True)
-                if wd_tags:
-                    bonus_str = f"　评分修正：{wd_bonus:+d}分" if wd_bonus != 0 else ""
-                    st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">依据：{"　/　".join(wd_tags)}{bonus_str}</div>', unsafe_allow_html=True)
+                wd_explain = {
+                    "洗盘": "💡 当前回调属于正常洗盘，主力仍在蓄势，可考虑逢低分批布局",
+                    "出货": "💡 警告：主力可能正在派发筹码，建议谨慎操作或逐步减仓规避风险",
+                    "中性": "💡 当前形态特征不明确，建议等待方向确认后再行操作，不宜重仓",
+                }.get(wd_decision, "")
+                tags_str2 = "　/　".join(wd_tags) if wd_tags else ""
+                bonus_str = f"　评分修正：{wd_bonus:+d}分" if wd_bonus != 0 else ""
+                st.markdown(
+                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:4px">依据：{tags_str2}{bonus_str}</div>'
+                    f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{wd_explain}</div>',
+                    unsafe_allow_html=True
+                )
 
                 # ===== 持仓结构饼图 =====
-                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
                 if holdings_df is not None:
                     st.caption(f"数据来源：{holdings_src}")
                     col_name = next(
@@ -2031,7 +2147,7 @@ with tab_analyze:
                     st.warning(holdings_src)
 
                 # ===== 机构评级（压缩统计）=====
-                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
                 if ratings_df is not None and not ratings_df.empty:
                     st.caption(f"数据来源：{ratings_src}")
                     rating_col = next(
@@ -2055,10 +2171,16 @@ with tab_analyze:
 
                 # ===== 交易信号（高亮）=====
                 signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
+                signal_explain = {
+                    "买入": "💡 技术面与资金面共同支持买入，建议在买点附近分批介入，严格执行止损",
+                    "卖出": "💡 超买或出货信号触发，建议减仓或止盈，避免追高被套",
+                    "观望": "💡 当前信号不够强烈，建议观望等待更明确的机会再行介入",
+                }.get(final_signal, "💡 综合各项指标后给出当前最优操作建议")
+                buy_tag_str = f"（{buy_tag}）" if buy_tag else ""
                 st.markdown(
-                    f'<div style="font-size:22px;font-weight:700;margin:16px 0 8px">'
-                    f'🎯 交易信号：<span style="color:{signal_color}">'
-                    f'{final_signal}{"（" + buy_tag + "）" if buy_tag else ""}</span></div>',
+                    f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px">🎯 交易信号</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:{signal_color};margin-bottom:4px">{final_signal}{buy_tag_str}</div>'
+                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">{signal_explain}</div>',
                     unsafe_allow_html=True
                 )
                 price_items = []
@@ -2071,28 +2193,50 @@ with tab_analyze:
                 if price_items:
                     st.markdown('<div style="display:flex;gap:10px;margin-top:8px">' + "".join(price_items) + '</div>', unsafe_allow_html=True)
 
-                # ===== 三栏辅助信息 =====
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📊 技术面</div>', unsafe_allow_html=True)
-                    st.write(f"短线趋势：{short_trend}")
-                    st.write(f"波段趋势：{mid_trend}")
-                    st.write(f"启动信号：{start_signal}（{start_level}，强度 {start_strength}/100）")
-                with col2:
-                    st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">💰 资金面</div>', unsafe_allow_html=True)
-                    st.write(f"主力状态：{money_state}")
-                    st.write(f"资金强度：{money_score}/100")
-                    st.info(money_explain)
-                with col3:
-                    st.markdown('<div style="font-size:18px;font-weight:700;margin-bottom:8px">📌 评分说明</div>', unsafe_allow_html=True)
-                    st.write(f"基础技术：{base_score}/100")
-                    st.write(f"多因子：{mf_score}/100")
-                    st.write(f"机构加成：{ratings_bonus:+d}")
-                    st.write(f"启动加成：{start_bonus:+d}")
-                    st.write(f"最终：{final_score}/100")
+                # ===== 技术面 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">📊 技术面</div>', unsafe_allow_html=True)
+                trend_color1 = "#ef4444" if short_trend == "上升" else "#22c55e"
+                trend_color2 = "#ef4444" if mid_trend == "上升" else "#22c55e"
+                tech_html = (
+                    '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">短线趋势</div><div style="font-size:14px;font-weight:700;color:{trend_color1}">{short_trend}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">波段趋势</div><div style="font-size:14px;font-weight:700;color:{trend_color2}">{mid_trend}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">启动信号</div><div style="font-size:13px;font-weight:700;color:#38bdf8">{start_level}</div></div>' +
+                    '</div>'
+                )
+                tech_explain = "💡 短线+波段同向上升为多空共振，趋势最强；方向相反时行情摇摆，建议谨慎"
+                if short_trend == "上升" and mid_trend == "上升":
+                    tech_explain = "💡 短线与波段均向上，多空共振，当前趋势强劲，可积极参与"
+                elif short_trend == "下降" and mid_trend == "下降":
+                    tech_explain = "💡 短线与波段均向下，建议回避，等待趋势反转信号出现"
+                st.markdown(tech_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{tech_explain}</div>', unsafe_allow_html=True)
+
+                # ===== 资金面 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">💰 资金面</div>', unsafe_allow_html=True)
+                money_color = {"主力拉升":"#ef4444","主力建仓":"#f97316","主力出货":"#22c55e","试盘":"#38bdf8","洗盘":"#a78bfa","震荡":"#94a3b8"}.get(money_state,"#64748b")
+                money_html = (
+                    '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">主力状态</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_state}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">资金强度</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_score}/100</div></div>' +
+                    '</div>'
+                )
+                st.markdown(money_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{money_explain}</div>', unsafe_allow_html=True)
+
+                # ===== 评分说明 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">📌 评分说明</div>', unsafe_allow_html=True)
+                score_html = (
+                    '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">技术基础</div><div style="font-size:14px;font-weight:700;color:#38bdf8">{base_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">多因子</div><div style="font-size:14px;font-weight:700;color:#a78bfa">{mf_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">筹码稳定</div><div style="font-size:14px;font-weight:700;color:#34d399">{chip_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">综合评分</div><div style="font-size:14px;font-weight:700;color:#f97316">{final_score}</div></div>' +
+                    '</div>'
+                )
+                score_explain = "💡 综合评分 70分以上可重点关注，85分以上为强信号；各分项均衡的股票比单项极高更可靠"
+                st.markdown(score_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{score_explain}</div>', unsafe_allow_html=True)
 
                 # ===== AI分析报告 =====
-                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">📊 AI分析报告</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">📊 AI分析报告</div>', unsafe_allow_html=True)
                 st.write(result)
 
                 # ===== 保存记录 =====
