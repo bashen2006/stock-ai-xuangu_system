@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.8</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.9</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -1374,74 +1374,51 @@ def explain_trade_logic(score, money_score, rsi):
 def render_ai_report(result, hot_flag):
     import re
 
-    # 章节配置：编号 → (图标, 边框色, 背景色, 是否重点)
+    # 章节配置：编号 → (显示标题, 组件类型)
+    # 组件类型: success/info/warning/error
     SECTION_CFG = {
-        '1':  ('🎯', '#ef4444', '#fff5f5', True),   # 当前阶段 - 最重要
-        '2':  ('📈', '#38bdf8', '#f0f9ff', False),  # 趋势分析
-        '3':  ('⚡', '#f59e0b', '#fffbeb', False),  # 接近突破
-        '4':  ('📊', '#a78bfa', '#f5f3ff', False),  # 上涨概率
-        '5':  ('⚠️', '#ef4444', '#fff5f5', False),  # 风险评估
-        '6':  ('💰', '#f97316', '#fff7ed', False),  # 主力资金
-        '7':  ('🤖', '#64748b', '#f8fafc', False),  # 系统决策
-        '8':  ('🎯', '#22c55e', '#f0fdf4', True),   # 操作策略 - 重要
-        '9':  (hot_flag[0], '#f59e0b', '#fffbeb', False),  # 热点 - 用真实图标
-        '10': ('🚨', '#ef4444', '#fff5f5', False),  # 被套风险
-        '11': ('💡', '#22c55e', '#f0fdf4', True),   # 一句话总结 - 最重要
+        '1':  (f'🎯 当前阶段判断',       'error'),
+        '2':  (f'📈 趋势分析',            'info'),
+        '3':  (f'⚡ 是否接近突破',        'warning'),
+        '4':  (f'📊 上涨概率',            'info'),
+        '5':  (f'⚠️ 风险评估',            'warning'),
+        '6':  (f'💰 主力资金解读',        'info'),
+        '7':  (f'🤖 系统交易决策',        'info'),
+        '8':  (f'✅ 具体操作策略',        'success'),
+        '9':  (f'{hot_flag} 行业与热点',  'warning'),
+        '10': (f'🚨 是否容易被套',        'error'),
+        '11': (f'💡 一句话总结',          'success'),
     }
 
-    # 解析章节
+    # 解析章节（两个捕获组：完整标题 + 编号）
     parts = re.split(r'(【(\d+)[\.、．\s][^】]*】)', result)
 
-    # 第一段（章节前的文字，通常是空的或引导语）
-    preamble = parts[0].strip()
-    if preamble:
-        st.markdown(f'<div style="font-size:13px;color:#64748b;margin-bottom:8px">{preamble}</div>',
-                    unsafe_allow_html=True)
-
-    i = 1
+    i = 0
     while i < len(parts):
-        if i + 2 < len(parts) and re.match(r'【\d+', parts[i]):
-            full_title = parts[i]      # 完整标题如 【1. 当前阶段判断】
-            num        = parts[i+1]    # 章节号如 "1"
-            content    = parts[i+2].strip() if i+2 < len(parts) else ''
+        part = parts[i]
+        # 检查是否是章节标题
+        if re.match(r'^【\d+', part) and i + 2 <= len(parts):
+            num     = parts[i + 1]                              # 章节编号
+            content = parts[i + 2].strip() if i + 2 < len(parts) else ''
             i += 3
 
-            cfg = SECTION_CFG.get(num, ('📌', '#94a3b8', '#f8fafc', False))
-            icon, border_color, bg_color, is_key = cfg
+            title, style = SECTION_CFG.get(num, ('📌', 'info'))
 
-            # 第11条（一句话总结）特殊处理
+            # 第11条（一句话总结）特殊展示
             if num == '11':
-                # 提取一句话（去掉多余换行）
-                summary = ' '.join(content.split())
-                st.markdown(
-                    f'<div style="background:linear-gradient(135deg,{bg_color},{bg_color});'
-                    f'border:2px solid {border_color};border-radius:10px;padding:14px 16px;'
-                    f'margin:12px 0;text-align:center">'
-                    f'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">{icon} 一句话总结</div>'
-                    f'<div style="font-size:16px;font-weight:700;color:#16a34a;line-height:1.5">{summary}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
+                st.success(f"**{title}**\n\n> {content}")
+            elif style == 'error':
+                st.error(f"**{title}**\n\n{content}")
+            elif style == 'warning':
+                st.warning(f"**{title}**\n\n{content}")
+            elif style == 'success':
+                st.success(f"**{title}**\n\n{content}")
             else:
-                # 普通章节卡片
-                border_width = '4px' if is_key else '3px'
-                title_display = full_title.strip('【】')
-                # 第9条标题替换图标
-                if num == '9':
-                    title_display = f"{hot_flag}  {title_display}"
-
-                st.markdown(
-                    f'<div style="border-left:{border_width} solid {border_color};'
-                    f'background:{bg_color};border-radius:0 8px 8px 0;'
-                    f'padding:10px 14px;margin-bottom:10px">'
-                    f'<div style="font-size:13px;font-weight:700;color:{border_color};'
-                    f'margin-bottom:6px">{icon} {title_display}</div>'
-                    f'<div style="font-size:13px;color:#334155;line-height:1.8;'
-                    f'white-space:pre-wrap">{content}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
+                st.info(f"**{title}**\n\n{content}")
         else:
+            # 章节外的零散文字（通常是空行）
+            if part.strip():
+                st.caption(part.strip())
             i += 1
 
 
