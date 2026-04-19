@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.7</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.8</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -191,13 +191,13 @@ with st.sidebar:
 
                 # 账号积分查询
                 try:
-                    user_df = pro.query('user_info')
+                    user_df = pro.user()
                     if user_df is not None and not user_df.empty:
-                        row = user_df.iloc[0]
-                        points   = row.get('min_points',   row.get('point',   '未知'))
-                        per_min  = row.get('total_minute', row.get('minute',  '未知'))
-                        nickname = row.get('nick_name',    row.get('name',    ''))
-                        results.append(f"💰 Tushare 积分：{points}分　每分钟调用：{per_min}次　{nickname}")
+                        row      = user_df.iloc[0]
+                        points   = row.get('points',       row.get('min_points', '未知'))
+                        per_min  = row.get('total_minute', row.get('minute',     '未知'))
+                        nickname = row.get('nick_name',    row.get('name',       ''))
+                        results.append(f"💰 Tushare 积分：{points}分　每分钟：{per_min}次　{nickname}")
                     else:
                         results.append("⚠️ Tushare 积分：查询返回空")
                 except Exception as e:
