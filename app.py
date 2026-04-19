@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.0</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.1</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -2141,9 +2141,16 @@ with tab_analyze:
                     margin=dict(l=10, r=50, t=40, b=10)
                 )
                 st.plotly_chart(fig, width='stretch',
-                                config={"scrollZoom": False,
-                                        "doubleClick": False,
-                                        "displayModeBar": False})
+                                config={
+                                    "scrollZoom": False,
+                                    "doubleClick": False,
+                                    "displayModeBar": "hover",
+                                    "modeBarButtonsToRemove": [
+                                        "select2d", "lasso2d",
+                                        "toggleSpikelines", "hoverCompareCartesian"
+                                    ],
+                                    "toImageButtonOptions": {"format": "png"}
+                                })
 
                 # ===== RSI 曲线 =====
                 if "RSI" in chart_df.columns:
