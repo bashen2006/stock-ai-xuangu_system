@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.9</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.0</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -193,15 +193,31 @@ with st.sidebar:
                 try:
                     user_df = pro.user(token=token)
                     if user_df is not None and not user_df.empty:
-                        row      = user_df.iloc[0]
-                        points   = row.get('points',       row.get('min_points', '未知'))
-                        per_min  = row.get('total_minute', row.get('minute',     '未知'))
-                        nickname = row.get('nick_name',    row.get('name',       ''))
-                        results.append(f"💰 Tushare 积分：{points}分　每分钟：{per_min}次　{nickname}")
+                        row = user_df.iloc[0]
+                        log_info(f"📋 Tushare user 字段：{list(row.index.tolist())}")
+                        # 尝试常见积分字段名
+                        points = next(
+                            (row[f] for f in ['points','min_points','point','score','integral'] if f in row.index),
+                            None
+                        )
+                        per_min = next(
+                            (row[f] for f in ['total_minute','minute','per_minute','api_minute'] if f in row.index),
+                            None
+                        )
+                        nickname = next(
+                            (row[f] for f in ['nick_name','nickname','name','username'] if f in row.index),
+                            ''
+                        )
+                        if points is not None:
+                            results.append(f"💰 Tushare 积分：{points}分　每分钟：{per_min}次　{nickname}")
+                        else:
+                            # 直接把所有字段显示出来
+                            fields = "　".join(f"{k}={v}" for k, v in row.items())
+                            results.append(f"📋 Tushare 账号信息：{fields}")
                     else:
                         results.append("⚠️ Tushare 积分：查询返回空")
                 except Exception as e:
-                    results.append(f"⚠️ Tushare 积分查询失败：{str(e)[:50]}")
+                    results.append(f"⚠️ Tushare 积分查询失败：{str(e)[:60]}")
 
         except Exception as e:
             results.append(f"❌ Tushare：{str(e)[:40]}")
