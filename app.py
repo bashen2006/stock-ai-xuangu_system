@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.3</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.4</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -1205,8 +1205,9 @@ def detect_washout_vs_distribution(df):
 
     # ===== 出货特征（减分）=====
 
-    # 高位滞涨放量（接近前高但收阴）
-    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and price <= open_p:
+    # 高位滞涨放量（收盘跌幅>1%才算）
+    drop_r = (open_p - price) / open_p if open_p > 0 else 0
+    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and drop_r > 0.01:
         score -= 35
         tags.append("高位放量滞涨")
 
@@ -1290,8 +1291,9 @@ def detect_main_control(df):
         score += 30
         tags.append("拉升")
 
-    # 出货：高位放量但收阴
-    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and price <= open_p:
+    # 出货：高位放量且明显收阴（跌幅>1%才算，小阴线不算）
+    drop_ratio = (open_p - price) / open_p if open_p > 0 else 0
+    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and drop_ratio > 0.01:
         score -= 35
         tags.append("出货")
 
