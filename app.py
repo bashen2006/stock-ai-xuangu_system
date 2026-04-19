@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.1</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.2</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -833,6 +833,102 @@ def detect_money_flow(df):
     return state, score
 
 # ===== 资金行为解释 =====
+# ===== 动态智能解释系统（V8.2）=====
+def generate_dynamic_explanation(
+    short_trend, mid_trend, rsi, final_signal,
+    money_state, ctrl_phase, ctrl_score,
+    wd_decision, wd_conf, chip_score
+):
+    """
+    根据当前实际状态生成动态解释，不使用固定模板
+    优先级：风险 > 主力行为 > 趋势结构 > 其他
+    """
+    conclusion = ""
+    logic = []
+    risk = []
+    action = ""
+
+    # ── 1. 最高优先级：风险信号 ───────────────────────────
+    is_risk = final_signal == "卖出" or rsi >= 80 or wd_decision == "出货"
+
+    if final_signal == "卖出" or rsi >= 80:
+        conclusion = "⚠️ 当前处于高风险区（超买/卖出信号触发）"
+        risk.append(f"RSI={rsi:.0f}，已进入超买区间，回调压力大")
+        if wd_decision == "出货":
+            risk.append(f"检测到主力出货迹象（置信度 {wd_conf}%）")
+        action = "建议减仓或观望，避免追高被套"
+
+    elif wd_decision == "出货" and wd_conf >= 50:
+        conclusion = "⚠️ 检测到出货信号，谨慎操作"
+        risk.append(f"主力出货置信度 {wd_conf}%，筹码松动")
+        action = "建议观望或逐步减仓"
+
+    # ── 2. 主力行为 ────────────────────────────────────────
+    if ctrl_score >= 60:
+        logic.append(f"主力控盘较强（{ctrl_phase}，强度 {ctrl_score}/100）")
+    elif ctrl_score >= 30:
+        logic.append(f"主力有一定介入（{ctrl_phase}）")
+
+    if wd_decision == "洗盘":
+        logic.append(f"当前为洗盘结构（置信度 {wd_conf}%），回调非出货")
+    elif wd_decision == "出货" and not is_risk:
+        logic.append(f"存在出货迹象（置信度 {wd_conf}%），需警惕")
+
+    # ── 3. 趋势结构（核心逻辑，必须精准） ─────────────────
+    if short_trend == "上升" and mid_trend == "上升":
+        logic.append("短线与波段均向上，多头共振，趋势强劲")
+    elif short_trend == "上升" and mid_trend == "下降":
+        logic.append("短线上涨但波段仍处下降阶段，属于反弹结构而非趋势反转")
+        if not is_risk:
+            risk.append("波段趋势未扭转，反弹随时可能结束")
+            if not action:
+                action = "轻仓观察，不宜重仓追涨"
+    elif short_trend == "下降" and mid_trend == "上升":
+        logic.append("波段上升中的短线回调，关注支撑位企稳")
+        if not action:
+            action = "等待短线止跌信号后再考虑介入"
+    else:
+        logic.append("短线与波段均向下，整体趋势偏弱")
+        risk.append("双线向下，空头趋势明显")
+        if not action:
+            action = "建议回避，等待趋势明确后再参与"
+
+    # ── 4. 资金与筹码补充 ─────────────────────────────────
+    if money_state in ["主力拉升", "主力建仓"]:
+        logic.append(f"资金面：{money_state}，有主力资金介入")
+    elif money_state in ["主力出货", "派发"]:
+        risk.append(f"资金面：{money_state}，主力资金在减少")
+
+    if chip_score >= 70:
+        logic.append("筹码稳定度高，持仓成本集中")
+    elif chip_score < 30:
+        risk.append("筹码稳定度低，浮动筹码较多")
+
+    # ── 5. 默认结论（非风险时） ───────────────────────────
+    if not conclusion:
+        if wd_decision == "洗盘" and ctrl_score >= 50:
+            conclusion = "✅ 主力洗盘阶段，回调是机会"
+            if not action:
+                action = "可关注回调低位分批布局"
+        elif short_trend == "上升" and mid_trend == "上升":
+            conclusion = "✅ 多头共振，趋势偏强"
+            if not action:
+                action = "可顺势参与，注意设置止损"
+        elif short_trend == "上升":
+            conclusion = "⚠️ 短线偏强但需确认"
+            if not action:
+                action = "轻仓试探，等待波段方向明确"
+        else:
+            conclusion = "⚠️ 趋势不明朗"
+            if not action:
+                action = "建议观望"
+
+    logic_str = "\n".join(f"• {l}" for l in logic) if logic else "• 暂无明显信号"
+    risk_str  = "\n".join(f"• {r}" for r in risk)  if risk  else "• 暂无明显风险"
+
+    return conclusion, logic_str, risk_str, action
+
+
 def explain_money_flow(state, score):
 
     if state == "吸筹中":
@@ -2267,18 +2363,27 @@ with tab_analyze:
                 else:
                     st.warning(ratings_src)
 
+                # ===== 动态智能解释 =====
+                dyn_conclusion, dyn_logic, dyn_risk, dyn_action = generate_dynamic_explanation(
+                    short_trend, mid_trend, latest['RSI'], final_signal,
+                    money_state, ctrl_phase, ctrl_score,
+                    wd_decision, wd_conf, chip_score
+                )
+                is_risk_state = final_signal == "卖出" or latest['RSI'] >= 80 or wd_decision == "出货"
+                dyn_component = st.error if is_risk_state else st.info
+                dyn_component(
+                    f"**{dyn_conclusion}**\n\n"
+                    f"**核心逻辑**\n{dyn_logic}\n\n"
+                    f"**风险提示**\n{dyn_risk}\n\n"
+                    f"**操作建议：** {dyn_action}"
+                )
+
                 # ===== 交易信号（高亮）=====
                 signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
-                signal_explain = {
-                    "买入": "💡 技术面与资金面共同支持买入，建议在买点附近分批介入，严格执行止损",
-                    "卖出": "💡 超买或出货信号触发，建议减仓或止盈，避免追高被套",
-                    "观望": "💡 当前信号不够强烈，建议观望等待更明确的机会再行介入",
-                }.get(final_signal, "💡 综合各项指标后给出当前最优操作建议")
                 buy_tag_str = f"（{buy_tag}）" if buy_tag else ""
                 st.markdown(
                     f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px">🎯 交易信号</div>'
-                    f'<div style="font-size:20px;font-weight:700;color:{signal_color};margin-bottom:4px">{final_signal}{buy_tag_str}</div>'
-                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">{signal_explain}</div>',
+                    f'<div style="font-size:20px;font-weight:700;color:{signal_color};margin-bottom:8px">{final_signal}{buy_tag_str}</div>',
                     unsafe_allow_html=True
                 )
                 price_items = []
@@ -2302,12 +2407,7 @@ with tab_analyze:
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">启动信号</div><div style="font-size:13px;font-weight:700;color:#38bdf8">{start_level}</div></div>' +
                     '</div>'
                 )
-                tech_explain = "💡 短线+波段同向上升为多空共振，趋势最强；方向相反时行情摇摆，建议谨慎"
-                if short_trend == "上升" and mid_trend == "上升":
-                    tech_explain = "💡 短线与波段均向上，多空共振，当前趋势强劲，可积极参与"
-                elif short_trend == "下降" and mid_trend == "下降":
-                    tech_explain = "💡 短线与波段均向下，建议回避，等待趋势反转信号出现"
-                st.markdown(tech_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{tech_explain}</div>', unsafe_allow_html=True)
+                st.markdown(tech_html, unsafe_allow_html=True)
 
                 # ===== 资金面 =====
                 st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">💰 资金面</div>', unsafe_allow_html=True)
@@ -2330,8 +2430,16 @@ with tab_analyze:
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">综合评分</div><div style="font-size:14px;font-weight:700;color:#f97316">{final_score}</div></div>' +
                     '</div>'
                 )
-                score_explain = "💡 综合评分 70分以上可重点关注，85分以上为强信号；各分项均衡的股票比单项极高更可靠"
-                st.markdown(score_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{score_explain}</div>', unsafe_allow_html=True)
+                # 评分说明动态化
+                if final_score >= 85:
+                    score_tip = "💡 强信号区间，各项指标较为一致，可重点关注"
+                elif final_score >= 70:
+                    score_tip = "💡 中等偏强，可关注但需结合趋势方向确认"
+                elif final_score >= 55:
+                    score_tip = "💡 信号偏弱，建议观望为主，等待更明确的机会"
+                else:
+                    score_tip = "💡 评分偏低，当前不具备介入条件，建议回避"
+                st.markdown(score_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{score_tip}</div>', unsafe_allow_html=True)
 
                 # ===== AI分析报告 =====
                 st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 10px">📋 AI分析报告</div>', unsafe_allow_html=True)
