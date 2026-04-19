@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.6</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.7</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -416,7 +416,7 @@ def get_stock_data(stock_code):
     if df is None:
         if not ENABLE_AKSHARE:
             log_info("⚠️ AKShare 备用接口已关闭（境外网络不通）")
-            return None, None
+            return None, None, ''
         try:
             import akshare as ak
             log_info(f"📌 AKShare 备用请求：{stock_code}")
@@ -425,7 +425,7 @@ def get_stock_data(stock_code):
 
             if raw is None or raw.empty:
                 log_error(f"❌ AKShare 也无数据（{stock_code}）：可能停牌或代码有误")
-                return None, None
+                return None, None, ''
 
             # AKShare 列名映射
             col_map = {
@@ -435,7 +435,7 @@ def get_stock_data(stock_code):
             missing = [c for c in col_map if c not in raw.columns]
             if missing:
                 log_error(f"❌ AKShare 字段缺失：{missing}")
-                return None, None
+                return None, None, ''
 
             df = raw[list(col_map.keys())].copy()
             df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
@@ -445,7 +445,7 @@ def get_stock_data(stock_code):
 
         except Exception as e:
             log_error(f"❌ AKShare 备用接口也失败：{translate_error(e)}")
-            return None, None
+            return None, None, ''
 
     save_cache(stock_code, df, stock_name)
     # 同时缓存行业信息
