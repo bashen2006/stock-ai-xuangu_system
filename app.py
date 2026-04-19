@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.8</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.9</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -191,7 +191,7 @@ with st.sidebar:
 
                 # 账号积分查询
                 try:
-                    user_df = pro.user()
+                    user_df = pro.user(token=token)
                     if user_df is not None and not user_df.empty:
                         row      = user_df.iloc[0]
                         points   = row.get('points',       row.get('min_points', '未知'))
