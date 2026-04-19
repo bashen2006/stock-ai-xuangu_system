@@ -9,55 +9,84 @@ from openai import OpenAI
 
 # 统一用绝对路径，避免 Streamlit Cloud 工作目录不一致
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_LOG_FILE = os.path.join(_BASE_DIR, "run.log")
+_LOG_FILE     = os.path.join(_BASE_DIR, "run.log")
 _RECORDS_FILE = os.path.join(_BASE_DIR, "records.csv")
+_CURSOR_FILE  = os.path.join(_BASE_DIR, "select_cursor.txt")
 
-# ===== GitHub 持久化：records.csv ↔ GitHub 仓库 =====
+def load_cursor():
+    try:
+        with open(_CURSOR_FILE, encoding="utf-8") as f:
+            return int(f.read().strip())
+    except:
+        return 0
+
+def save_cursor(pos):
+    try:
+        with open(_CURSOR_FILE, "w", encoding="utf-8") as f:
+            f.write(str(pos))
+        push_cursor_to_github()
+    except:
+        pass
+
+# ===== GitHub 持久化（通用）=====
 def _gh_headers():
     token = st.secrets.get("GITHUB_TOKEN")
     return {"Authorization": f"token {token}"} if token else None
 
-def _gh_api_url():
-    repo = st.secrets.get("GITHUB_REPO")
-    return f"https://api.github.com/repos/{repo}/contents/records.csv" if repo else None
+def _gh_repo():
+    return st.secrets.get("GITHUB_REPO")
 
-def pull_records_from_github():
-    """启动时从 GitHub 拉取 records.csv（如果本地不存在）"""
-    if os.path.exists(_RECORDS_FILE):
+def _gh_pull(remote_path, local_path):
+    """从 GitHub 拉取文件到本地（本地不存在时）"""
+    if os.path.exists(local_path):
         return
     headers = _gh_headers()
-    url = _gh_api_url()
-    if not headers or not url:
+    repo    = _gh_repo()
+    if not headers or not repo:
         return
     try:
+        url = f"https://api.github.com/repos/{repo}/contents/{remote_path}"
         r = _requests.get(url, headers=headers, timeout=8)
         if r.status_code == 200:
-            content = base64.b64decode(r.json()["content"])
-            with open(_RECORDS_FILE, "wb") as f:
-                f.write(content)
-            log_info("✅ 从 GitHub 恢复 records.csv")
+            data = base64.b64decode(r.json()["content"])
+            with open(local_path, "wb") as f:
+                f.write(data)
+            log_info(f"✅ 从 GitHub 恢复 {remote_path}")
     except Exception as e:
-        log_info(f"⚠️ 从 GitHub 拉取 records.csv 失败（{e}）")
+        log_info(f"⚠️ 从 GitHub 拉取 {remote_path} 失败（{e}）")
 
-def push_records_to_github():
-    """写入记录后同步推送到 GitHub"""
+def _gh_push(remote_path, local_path, commit_msg):
+    """把本地文件推送到 GitHub"""
     headers = _gh_headers()
-    url = _gh_api_url()
-    if not headers or not url:
+    repo    = _gh_repo()
+    if not headers or not repo:
         return
     try:
-        with open(_RECORDS_FILE, "rb") as f:
+        with open(local_path, "rb") as f:
             content = base64.b64encode(f.read()).decode()
-        # 获取当前文件 SHA（更新时必须）
-        r = _requests.get(url, headers=headers, timeout=8)
+        url = f"https://api.github.com/repos/{repo}/contents/{remote_path}"
+        r   = _requests.get(url, headers=headers, timeout=8)
         sha = r.json().get("sha") if r.status_code == 200 else None
-        payload = {"message": "update records.csv", "content": content, "branch": "main"}
+        payload = {"message": commit_msg, "content": content, "branch": "main"}
         if sha:
             payload["sha"] = sha
         _requests.put(url, headers=headers, json=payload, timeout=10)
-        log_info("✅ records.csv 已同步到 GitHub")
+        log_info(f"✅ {remote_path} 已同步到 GitHub")
     except Exception as e:
-        log_info(f"⚠️ 同步 records.csv 到 GitHub 失败（{e}）")
+        log_info(f"⚠️ 同步 {remote_path} 到 GitHub 失败（{e}）")
+
+# 便捷封装
+def pull_records_from_github():
+    _gh_pull("records.csv", _RECORDS_FILE)
+
+def push_records_to_github():
+    _gh_push("records.csv", _RECORDS_FILE, "update records.csv")
+
+def pull_cursor_from_github():
+    _gh_pull("select_cursor.txt", _CURSOR_FILE)
+
+def push_cursor_to_github():
+    _gh_push("select_cursor.txt", _CURSOR_FILE, "update select_cursor.txt")
 
 # ===== 错误翻译（英文 → 中文）=====
 def translate_error(e):
@@ -101,15 +130,16 @@ ENABLE_AKSHARE = False
 # JoinQuant 免费版不包含 finance 表，关闭避免无效调用
 ENABLE_JQDATA_HOLDINGS = False
 
-# 启动时从 GitHub 恢复 records.csv（如本地不存在）
+# 启动时从 GitHub 恢复持久化文件
 pull_records_from_github()
+pull_cursor_from_github()
 
 st.set_page_config(layout="wide")
 
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.3</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V6.7</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -151,11 +181,28 @@ with st.sidebar:
             else:
                 ts.set_token(token)
                 pro = ts.pro_api()
+
+                # 行情可用性
                 df_test = ts.pro_bar(ts_code="000001.SZ", adj="qfq", limit=1)
                 if df_test is not None and not df_test.empty:
                     results.append("✅ Tushare 行情：可用")
                 else:
                     results.append("⚠️ Tushare 行情：返回空")
+
+                # 账号积分查询
+                try:
+                    user_df = pro.query('user_info')
+                    if user_df is not None and not user_df.empty:
+                        row = user_df.iloc[0]
+                        points   = row.get('min_points',   row.get('point',   '未知'))
+                        per_min  = row.get('total_minute', row.get('minute',  '未知'))
+                        nickname = row.get('nick_name',    row.get('name',    ''))
+                        results.append(f"💰 Tushare 积分：{points}分　每分钟调用：{per_min}次　{nickname}")
+                    else:
+                        results.append("⚠️ Tushare 积分：查询返回空")
+                except Exception as e:
+                    results.append(f"⚠️ Tushare 积分查询失败：{str(e)[:50]}")
+
         except Exception as e:
             results.append(f"❌ Tushare：{str(e)[:40]}")
 
@@ -436,38 +483,54 @@ def get_stock_pool():
     except:
         return None
 
-# ===== 智能过滤（关键）=====
-def filter_stocks(df):
-
+# ===== 智能过滤（严格版）=====
+def filter_stocks(df, mode_type="trend"):
     latest = df.iloc[-1]
-
-    ma5 = latest['MA5']
-    ma10 = latest['MA10']
-    rsi = latest['RSI']
-    vol = latest['成交量']
+    ma5    = latest['MA5']
+    ma10   = latest['MA10']
+    rsi    = latest['RSI']
+    vol    = latest['成交量']
     vol_ma5 = latest['VOL_MA5']
 
-    # 趋势不能太弱
-    if ma5 < ma10:
-        return False
+    try:
+        ma20 = latest['MA20']
+    except:
+        ma20 = ma10
 
-    # 动量不能太差
-    if rsi < 35:
-        return False
-
-    # 没有资金不做
-    if vol < vol_ma5 * 0.8:
-        return False
+    if mode_type == "trend":
+        # 趋势模式：三均线多头排列 + RSI强势区 + 成交量放大
+        if not (ma5 > ma10 > ma20):       # 均线必须全部向上排列
+            return False
+        if rsi < 50 or rsi > 80:          # RSI 在强势区（50-80），排除超买
+            return False
+        if vol < vol_ma5 * 1.2:           # 成交量必须放大20%以上
+            return False
+    else:
+        # 低吸模式：超跌反弹条件
+        if ma5 > ma10:                    # 均线仍向下，才是真低吸
+            return False
+        if rsi < 25 or rsi > 45:          # RSI 在超卖回升区（25-45）
+            return False
+        if vol < vol_ma5 * 1.0:           # 成交量至少持平（开始有人接盘）
+            return False
 
     return True
 
 # ===== 自动选股函数（V3.1）=====
 def auto_select_stocks(stock_list, mode_type):
     results = []
+    total_pool = len(stock_list)
 
-    # 最多分析300支
-    stock_list = stock_list[:300]
-    total = len(stock_list)
+    # 读取上次游标
+    cursor = load_cursor()
+    if cursor >= total_pool:
+        cursor = 0  # 已跑完一轮，从头开始
+        st.info("🔄 已完成一轮全量扫描，从头开始新一轮")
+
+    end = min(cursor + 300, total_pool)
+    batch = stock_list[cursor:end]
+
+    st.caption(f"📍 本轮分析第 {cursor+1} ～ {end} 支（共 {total_pool} 支），上次停在第 {cursor} 支")
 
     progress = st.progress(0, text="准备中...")
     status   = st.empty()
@@ -475,10 +538,10 @@ def auto_select_stocks(stock_list, mode_type):
 
     last_call_time = 0
 
-    for idx, stock_code in enumerate(stock_list):
+    for idx, stock_code in enumerate(batch):
         try:
-            progress.progress((idx + 1) / total,
-                              text=f"分析中 {idx+1}/{total}：{stock_code}")
+            progress.progress((idx + 1) / len(batch),
+                              text=f"分析中 {cursor+idx+1}/{total_pool}：{stock_code}")
             status.caption(f"已筛选到 {len(results)} 支候选股")
 
             now = time.time()
@@ -488,54 +551,50 @@ def auto_select_stocks(stock_list, mode_type):
             last_call_time = time.time()
 
             df, stock_name = get_stock_data(stock_code)
-
             if df is None or df.empty:
                 continue
 
             df = calculate_indicators(df)
-
-            if not filter_stocks(df):
+            if not filter_stocks(df, mode_type):
                 continue
 
             latest = df.iloc[-1]
             price = latest['收盘']
-
             money_state, money_score = detect_money_flow(df)
-
             low_20  = df['最低'].tail(20).min()
             high_20 = df['最高'].tail(20).max()
-
             score, trend_s, momentum_s, pos_s, vol_s = calculate_score_v2(
                 df, price, low_20, high_20, mode_type
             )
 
             results.append({
-                "股票":   stock_name,
-                "代码":   stock_code,
-                "价格":   price,
-                "RSI":    round(latest['RSI'], 2),
-                "总评分": score,
+                "股票":     stock_name,
+                "代码":     stock_code,
+                "价格":     price,
+                "RSI":      round(latest['RSI'], 2),
+                "总评分":   score,
                 "资金状态": money_state,
             })
 
-            # 每找到一支就实时更新表格
             if results:
                 result_placeholder.dataframe(
-                    pd.DataFrame(results).sort_values("总评分", ascending=False),
+                    pd.DataFrame(results).sort_values("总评分", ascending=False).head(5),
                     hide_index=True
                 )
 
         except Exception as e:
             log_info(f"⚠️ 自动选股跳过（{stock_code}）：{translate_error(e)}")
 
+    # 保存游标（下次从 end 继续）
+    save_cursor(end)
     progress.empty()
     status.empty()
+    st.caption(f"✅ 本轮完成，下次将从第 {end+1} 支继续")
 
     df_result = pd.DataFrame(results)
     if df_result.empty:
         return None
-
-    return df_result.sort_values(by="总评分", ascending=False)
+    return df_result.sort_values(by="总评分", ascending=False).head(5)
 
 # ===== 趋势 =====
 def get_trend(df):
@@ -1308,6 +1367,7 @@ with tab_analyze:
                     st.stop()
 
                 st.write("🔍 分析中，请稍等...")
+                _prog = st.progress(0, text="正在获取行情数据...")
 
                 df, stock_name = get_stock_data(stock_code)
 
@@ -1316,44 +1376,31 @@ with tab_analyze:
                     st.session_state.analyze_running = False
                     st.stop()
 
+                _prog.progress(15, text="计算技术指标...")
                 df = df.tail(100)
                 df = calculate_indicators(df)
 
                 latest = df.iloc[-1]
                 price = latest['收盘']
 
-                # ===== 资金行为分析 =====
+                _prog.progress(30, text="分析资金行为...")
                 money_state, money_score = detect_money_flow(df)
                 money_explain = explain_money_flow(money_state, money_score)
 
                 high_20 = df['最高'].tail(20).max()
-                low_20 = df['最低'].tail(20).min()
-
+                low_20  = df['最低'].tail(20).min()
                 high_60 = df['最高'].tail(60).max()
-                low_60 = df['最低'].tail(60).min()
-
+                low_60  = df['最低'].tail(60).min()
                 short_trend, mid_trend = get_trend(df)
 
-                # ===== 第1步：基础评分 =====
-                base_score, _, _, _, _ = calculate_score_v2(
-                    df, price, low_20, high_20, mode_type
-                )
-
-                # ===== 第2步：多因子评分 =====
-                mf_score = multi_factor_score(df)
-
-                # ===== 第3步：融合评分 =====
+                _prog.progress(45, text="多维度评分中...")
+                base_score, _, _, _, _ = calculate_score_v2(df, price, low_20, high_20, mode_type)
+                mf_score      = multi_factor_score(df)
                 combined_score = int(base_score * 0.6 + mf_score * 0.4)
-
-                # ===== 第4步：启动识别 =====
                 start_signal, start_level, start_strength = detect_start_signal(df)
+                final_score, phase = unified_decision(df, combined_score, money_state, money_score)
 
-                # ===== 第5步：统一决策（资金阶段为主裁判）=====
-                final_score, phase = unified_decision(
-                    df, combined_score, money_state, money_score
-                )
-
-                # ===== 第6步：机构评级（先取数，再计算加成）=====
+                _prog.progress(60, text="获取机构评级...")
                 ratings_df, ratings_src = get_institution_ratings(stock_code)
 
                 # 机构评级加成（最高±10分）
@@ -1397,9 +1444,11 @@ with tab_analyze:
                     stop_loss = update_trailing_stop(stock_code, stop_loss)
 
                 # ===== 第11步：持仓结构（仅展示，不计分）=====
+                _prog.progress(80, text="获取持仓数据...")
                 holdings_df, holdings_src = get_holding_structure(stock_code)
 
                 # ===== GPT分析（完整 + 热点判断）=====
+                _prog.progress(90, text="AI 综合分析中...")
                 prompt = f"""
     你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行"分析 + 交易决策"。
 
@@ -1554,6 +1603,8 @@ with tab_analyze:
                 import plotly.express as px
                 import plotly.subplots as sp
 
+                _prog.progress(100, text="完成！")
+                _prog.empty()
                 st.success("✅ 分析完成")
 
                 # ===== 标题 + 星级 =====
