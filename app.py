@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.9</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.0</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -1370,53 +1370,52 @@ def explain_trade_logic(score, money_score, rsi):
 
     return text
 
-# ===== AI 分析报告渲染（分章节卡片）=====
+# ===== AI 分析报告渲染（问答卡片形式）=====
 def render_ai_report(result, hot_flag):
     import re
 
-    # 章节配置：编号 → (显示标题, 组件类型)
-    # 组件类型: success/info/warning/error
+    # 章节配置：编号 → (标题, 组件类型)
     SECTION_CFG = {
-        '1':  (f'🎯 当前阶段判断',       'error'),
-        '2':  (f'📈 趋势分析',            'info'),
-        '3':  (f'⚡ 是否接近突破',        'warning'),
-        '4':  (f'📊 上涨概率',            'info'),
-        '5':  (f'⚠️ 风险评估',            'warning'),
-        '6':  (f'💰 主力资金解读',        'info'),
-        '7':  (f'🤖 系统交易决策',        'info'),
-        '8':  (f'✅ 具体操作策略',        'success'),
-        '9':  (f'{hot_flag} 行业与热点',  'warning'),
-        '10': (f'🚨 是否容易被套',        'error'),
-        '11': (f'💡 一句话总结',          'success'),
+        '1':  (f'🎯 当前阶段判断',      'error'),
+        '2':  (f'📈 趋势分析',           'info'),
+        '3':  (f'⚡ 是否接近突破',       'warning'),
+        '4':  (f'📊 上涨概率',           'info'),
+        '5':  (f'⚠️ 风险评估',           'warning'),
+        '6':  (f'💰 主力资金解读',       'info'),
+        '7':  (f'🤖 系统交易决策',       'info'),
+        '8':  (f'✅ 具体操作策略',       'success'),
+        '9':  (f'{hot_flag} 行业与热点', 'warning'),
+        '10': (f'🚨 是否容易被套',       'error'),
+        '11': (f'💡 一句话总结',         'success'),
     }
 
-    # 解析章节（两个捕获组：完整标题 + 编号）
     parts = re.split(r'(【(\d+)[\.、．\s][^】]*】)', result)
 
     i = 0
     while i < len(parts):
         part = parts[i]
-        # 检查是否是章节标题
         if re.match(r'^【\d+', part) and i + 2 <= len(parts):
-            num     = parts[i + 1]                              # 章节编号
+            num     = parts[i + 1]
             content = parts[i + 2].strip() if i + 2 < len(parts) else ''
             i += 3
 
-            title, style = SECTION_CFG.get(num, ('📌', 'info'))
+            title, style = SECTION_CFG.get(num, ('📌 分析', 'info'))
 
-            # 第11条（一句话总结）特殊展示
+            # 第11条特殊：居中大字总结
             if num == '11':
-                st.success(f"**{title}**\n\n> {content}")
-            elif style == 'error':
-                st.error(f"**{title}**\n\n{content}")
-            elif style == 'warning':
-                st.warning(f"**{title}**\n\n{content}")
-            elif style == 'success':
-                st.success(f"**{title}**\n\n{content}")
+                st.success(f"**{title}**\n\n---\n\n> 💬 {content}")
             else:
-                st.info(f"**{title}**\n\n{content}")
+                # 问答形式：标题行 + 分隔线 + 内容
+                body = f"**{title}**\n\n---\n\n{content}"
+                if style == 'error':
+                    st.error(body)
+                elif style == 'warning':
+                    st.warning(body)
+                elif style == 'success':
+                    st.success(body)
+                else:
+                    st.info(body)
         else:
-            # 章节外的零散文字（通常是空行）
             if part.strip():
                 st.caption(part.strip())
             i += 1
@@ -2076,22 +2075,62 @@ with tab_analyze:
                     x=chart_df["日期"],
                     open=chart_df["开盘"], high=chart_df["最高"],
                     low=chart_df["最低"], close=chart_df["收盘"],
-                    name="K线"
+                    name="K线",
+                    increasing_line_color="#ef4444",
+                    decreasing_line_color="#10b981",
                 ), row=1, col=1)
-                for ma, color in [("MA5", "#f97316"), ("MA10", "#38bdf8"), ("MA20", "#a78bfa")]:
+
+                # MA 线：粗细和线型各不同，一眼能分清
+                ma_styles = [
+                    ("MA5",  "#f97316", 1.5, "solid"),
+                    ("MA10", "#38bdf8", 1.2, "dot"),
+                    ("MA20", "#a78bfa", 1.2, "dash"),
+                ]
+                for ma, color, width, dash in ma_styles:
                     if ma in chart_df.columns:
                         fig.add_trace(go.Scatter(
                             x=chart_df["日期"], y=chart_df[ma],
-                            mode="lines", name=ma, line=dict(width=1, color=color)
+                            mode="lines", name=ma,
+                            line=dict(width=width, color=color, dash=dash)
                         ), row=1, col=1)
+
+                # 最高价和最低价标注
+                idx_high = chart_df["最高"].idxmax()
+                idx_low  = chart_df["最低"].idxmin()
+                high_val = chart_df.loc[idx_high, "最高"]
+                low_val  = chart_df.loc[idx_low,  "最低"]
+                high_dt  = chart_df.loc[idx_high, "日期"]
+                low_dt   = chart_df.loc[idx_low,  "日期"]
+
+                fig.add_trace(go.Scatter(
+                    x=[high_dt], y=[high_val],
+                    mode="markers+text",
+                    marker=dict(color="#ef4444", size=8, symbol="triangle-up"),
+                    text=[f"高 {high_val:.2f}"],
+                    textposition="top center",
+                    textfont=dict(size=10, color="#ef4444"),
+                    showlegend=False, name="最高价"
+                ), row=1, col=1)
+
+                fig.add_trace(go.Scatter(
+                    x=[low_dt], y=[low_val],
+                    mode="markers+text",
+                    marker=dict(color="#10b981", size=8, symbol="triangle-down"),
+                    text=[f"低 {low_val:.2f}"],
+                    textposition="bottom center",
+                    textfont=dict(size=10, color="#10b981"),
+                    showlegend=False, name="最低价"
+                ), row=1, col=1)
+
                 vol_colors = ["#ef4444" if c >= o else "#10b981"
                               for c, o in zip(chart_df["收盘"], chart_df["开盘"])]
                 fig.add_trace(go.Bar(
                     x=chart_df["日期"], y=chart_df["成交量"],
                     marker_color=vol_colors, name="成交量", showlegend=False
                 ), row=2, col=1)
+
                 fig.update_layout(
-                    height=480, showlegend=True,
+                    height=500, showlegend=True,
                     xaxis_rangeslider_visible=False,
                     dragmode=False,
                     legend=dict(
@@ -2099,7 +2138,7 @@ with tab_analyze:
                         itemclick=False,
                         itemdoubleclick=False
                     ),
-                    margin=dict(l=10, r=10, t=40, b=10)
+                    margin=dict(l=10, r=50, t=40, b=10)
                 )
                 st.plotly_chart(fig, width='stretch',
                                 config={"scrollZoom": False,
