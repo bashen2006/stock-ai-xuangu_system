@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.8</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.9</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V8.9** 机构评级明细表修复：加目标价列、按日期降序排（最新在前）、显示最多15条<br>
 **V8.8** 机构评级三大关键信号真正落地：①卖出评级检测②近30天覆盖突增检测③目标价 vs 现价空间计算，触发时明确提示，未触发也说明原因<br>
 **V8.7** 机构评级说明升级：按覆盖数量分级解读（1家/2-4家/5-9家/10家+），加使用须知（A股买入评级占96%的行业背景），关注卖出评级和覆盖数量突增才是真信号<br>
 **V8.6** 持仓数据源升级：主接口改为 top10_holders（前十大股东，积分要求低），次接口 top10_floatholders（前十大流通股东），JoinQuant 降为第三级备用<br>
@@ -2483,11 +2484,15 @@ with tab_analyze:
                         bonus_tip = f"　｜　本次评分加成：{ratings_bonus:+d}分" if ratings_bonus != 0 else "　｜　评分加成：±0"
                         rating_style(rating_tip + bonus_tip)
 
-                    # 显示评级明细表（精简列）
-                    show_cols = [c for c in ["日期", "机构", "分析师", "评级", "变动"] if c in ratings_df.columns]
+                    # 显示评级明细表，按日期降序，最新在前
+                    show_cols = [c for c in ["日期", "机构", "分析师", "评级", "变动", "目标价", "目标价涨幅%"]
+                                 if c in ratings_df.columns]
                     if not show_cols:
                         show_cols = list(ratings_df.columns)
-                    st.dataframe(ratings_df[show_cols], width='stretch', hide_index=True)
+                    display_df = ratings_df[show_cols].copy()
+                    if "日期" in display_df.columns:
+                        display_df = display_df.sort_values("日期", ascending=False)
+                    st.dataframe(display_df.head(15), width='stretch', hide_index=True)
                 else:
                     st.warning(ratings_src)
                     st.caption("💡 机构评级需要 Tushare 2000+ 积分独享账号，当前不可用；评分系统将跳过机构加成，不影响其他评分")
