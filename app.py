@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.4</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.5</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V8.5** 机构评级加动态解读说明（分布→结论→评分加成），无数据时说明原因；评级已实现"有数据加分、无数据跳过"的条件评分机制<br>
 **V8.4** 选股结果持久化（session_state），切 Tab 回来结果还在<br>
 **V8.3** 自动选股实时显示所有候选股，按评分降序动态更新<br>
 **V8.2** 动态智能解释系统：替换所有固定模板文案，基于实际状态生成结论/逻辑/风险/建议<br>
@@ -2368,9 +2369,34 @@ with tab_analyze:
                             '</div>'
                         )
                         st.markdown(rating_html, unsafe_allow_html=True)
-                    st.dataframe(ratings_df, width='stretch', hide_index=True)
+
+                        # 动态说明：根据评级分布给出解读
+                        total_r = buy_cnt + hold_cnt + sell_cnt
+                        if sell_cnt > 0:
+                            rating_tip = f"⚠️ {sell_cnt} 家机构给出卖出/减持评级，需谨慎对待"
+                            rating_style = st.warning
+                        elif buy_cnt >= total_r * 0.8:
+                            rating_tip = f"✅ {buy_cnt}/{total_r} 家机构看多（买入/增持），机构共识较强"
+                            rating_style = st.success
+                        elif buy_cnt >= total_r * 0.5:
+                            rating_tip = f"📊 {buy_cnt}/{total_r} 家机构看多，多数偏积极但分歧存在"
+                            rating_style = st.info
+                        else:
+                            rating_tip = f"⚠️ 机构看法分歧较大，多空各执一词，谨慎参考"
+                            rating_style = st.warning
+
+                        # 显示评分加成
+                        bonus_tip = f"　｜　本次评分加成：{ratings_bonus:+d}分" if ratings_bonus != 0 else "　｜　评分加成：±0（中性）"
+                        rating_style(rating_tip + bonus_tip)
+
+                    # 显示评级明细表（精简列）
+                    show_cols = [c for c in ["日期", "机构", "分析师", "评级", "变动"] if c in ratings_df.columns]
+                    if not show_cols:
+                        show_cols = list(ratings_df.columns)
+                    st.dataframe(ratings_df[show_cols], width='stretch', hide_index=True)
                 else:
                     st.warning(ratings_src)
+                    st.caption("💡 机构评级需要 Tushare 2000+ 积分独享账号，当前不可用；评分系统将跳过机构加成，不影响其他评分")
 
                 # ===== 动态智能解释 =====
                 dyn_conclusion, dyn_logic, dyn_risk, dyn_action = generate_dynamic_explanation(
