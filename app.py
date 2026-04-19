@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.2</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.4</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,17 +148,24 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
-**V5.8** 热点判断改为专门提取第9项内容判断，不再全文扫描关键词；标题居中加大（22px）<br>
-**V5.7** 热点冷词加热点上下文要求，热词覆盖更多表达<br>
-**V5.6** 数据源终态：禁用 JoinQuant/AKShare 无效调用，标题一行显示，更新日志折叠
-**V5.5** 侧边栏一键检测数据源能力<br>
-**V5.4** 容错：股票代码校验、持仓源优先级调换、JoinQuant 字段校验<br>
-**V5.3** 标题缩小、JoinQuant 改用 STK_HOLDER_PERCENTAGE<br>
-**V5.2** 热点误判修复、日志绝对路径<br>
-**V5.1** 侧边栏运行日志可视化<br>
-**V5.0** 热点识别逻辑修复<br>
-**V4.9** 缓存过期机制根本修复（内嵌时间戳）<br>
-**V4.x** 可视化 UI、多因子评分、统一决策、执行控制等
+**V8.4** 选股结果持久化（session_state），切 Tab 回来结果还在<br>
+**V8.3** 自动选股实时显示所有候选股，按评分降序动态更新<br>
+**V8.2** 动态智能解释系统：替换所有固定模板文案，基于实际状态生成结论/逻辑/风险/建议<br>
+**V8.1** K线/RSI 图表保留悬停工具栏，全屏后可正常缩放<br>
+**V8.0** AI报告分章节卡片，K线MA线粗细线型区分，最高/最低价标注<br>
+**V7.9** AI报告改用 Streamlit 原生组件渲染，手机端兼容<br>
+**V7.8** AI报告问答卡片加分隔线，第11条一句话总结引用块突出<br>
+**V7.7** 修复 get_stock_data 返回值不一致（2元组→3元组）<br>
+**V7.6** 热点判断接入涨停板实时数据，prompt 加国际市场分析引导<br>
+**V7.5** 全页 UI 统一：所有标题16px、卡片布局、各模块加白话解释<br>
+**V7.4** 修复出货误判 bug（小阴线不再触发出货）<br>
+**V7.3** 所有 st.metric 替换为 HTML 卡片，颜色语义化<br>
+**V7.2** 新增筹码稳定度/洗盘出货判断/主力控盘三大模块，评分权重更新<br>
+**V7.1** Tushare 积分查询修复（pro.user + 字段自动探测）<br>
+**V7.0** 积分查询改为自动探测字段名<br>
+**V6.x** 复盘系统修复、GitHub持久化、自动选股进度条/游标/限速<br>
+**V5.x** 数据源终态、热点修复、日志可视化、缓存根本修复、页面布局重组<br>
+**V4.x** 可视化 UI、多因子评分、统一决策、执行控制、K线图等基础功能
 
 </div>
 """, unsafe_allow_html=True)
@@ -627,7 +634,7 @@ def auto_select_stocks(stock_list, mode_type):
 
             if results:
                 result_placeholder.dataframe(
-                    pd.DataFrame(results).sort_values("总评分", ascending=False).head(5),
+                    pd.DataFrame(results).sort_values("总评分", ascending=False),
                     hide_index=True
                 )
 
@@ -643,7 +650,7 @@ def auto_select_stocks(stock_list, mode_type):
     df_result = pd.DataFrame(results)
     if df_result.empty:
         return None
-    return df_result.sort_values(by="总评分", ascending=False).head(5)
+    return df_result.sort_values(by="总评分", ascending=False)
 
 # ===== 趋势 =====
 def get_trend(df):
@@ -1798,6 +1805,8 @@ if "stock_pool" not in st.session_state:
     st.session_state.stock_pool = None
 if "mode_type" not in st.session_state:
     st.session_state.mode_type = "trend"
+if "select_result" not in st.session_state:
+    st.session_state.select_result = None  # 保存选股结果，切 Tab 不丢失
 
 # mode_type 读自 session_state（在自动选股 tab 里可以更新）
 mode_type = st.session_state.mode_type
@@ -2472,7 +2481,6 @@ with tab_select:
         if st.session_state.select_running:
             st.warning("⚠️ 正在运行，请勿重复点击")
             st.stop()
-
         st.session_state.select_running = True
 
         try:
@@ -2490,9 +2498,11 @@ with tab_select:
             df_select = auto_select_stocks(stock_list, mode_type)
 
             if df_select is not None:
+                st.session_state.select_result = df_select  # 存入 session_state
                 st.success(f"✅ 完成，共筛出 {len(df_select)} 支候选股")
                 st.dataframe(df_select, hide_index=True)
             else:
+                st.session_state.select_result = None
                 st.info("本次未筛选出符合条件的股票")
 
         except Exception as e:
@@ -2501,8 +2511,14 @@ with tab_select:
         finally:
             st.session_state.select_running = False
 
-# ══════════════════════════════════════════════
-# Tab 3：历史复盘
+    # 无论是否刚跑完，都显示上次的结果（切 Tab 回来还在）
+    if st.session_state.select_result is not None:
+        df_saved = st.session_state.select_result
+        st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin:8px 0">上次结果：共 {len(df_saved)} 支候选股（按评分排序）</div>', unsafe_allow_html=True)
+        st.dataframe(df_saved, hide_index=True)
+        if st.button("清除结果", key="btn_clear_select"):
+            st.session_state.select_result = None
+            st.rerun()
 # ══════════════════════════════════════════════
 with tab_review:
     st.caption("每次点击「开始分析」后会自动保存记录，复盘数据在当次部署会话内有效")
