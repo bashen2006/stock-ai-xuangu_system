@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.0</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.2</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -197,11 +197,15 @@ with st.sidebar:
                         log_info(f"📋 Tushare user 字段：{list(row.index.tolist())}")
                         # 尝试常见积分字段名
                         points = next(
-                            (row[f] for f in ['points','min_points','point','score','integral'] if f in row.index),
+                            (row[f] for f in ['到期积分','points','min_points','point','score'] if f in row.index),
                             None
                         )
                         per_min = next(
                             (row[f] for f in ['total_minute','minute','per_minute','api_minute'] if f in row.index),
+                            None
+                        )
+                        expire = next(
+                            (row[f] for f in ['到期时间','expire_time','expire'] if f in row.index),
                             None
                         )
                         nickname = next(
@@ -209,7 +213,8 @@ with st.sidebar:
                             ''
                         )
                         if points is not None:
-                            results.append(f"💰 Tushare 积分：{points}分　每分钟：{per_min}次　{nickname}")
+                            expire_str = f"　到期：{str(expire)[:10]}" if expire else ""
+                            results.append(f"💰 Tushare 积分等级：{points}分{expire_str}　每分钟：{per_min}次　{nickname}")
                         else:
                             # 直接把所有字段显示出来
                             fields = "　".join(f"{k}={v}" for k, v in row.items())
@@ -572,6 +577,16 @@ def auto_select_stocks(stock_list, mode_type):
 
             df = calculate_indicators(df)
             if not filter_stocks(df, mode_type):
+                continue
+
+            # 筹码稳定度过滤（太不稳定跳过）
+            chip_s = calc_chip_stability(df)
+            if chip_s < 25:
+                continue
+
+            # 出货过滤（明确出货信号跳过）
+            wd_dec, wd_c, _ = detect_washout_vs_distribution(df)
+            if wd_dec == "出货" and wd_c > 50:
                 continue
 
             latest = df.iloc[-1]
@@ -1094,6 +1109,210 @@ def apply_start_bonus(score, start_level, start_signal):
 
     return score
 
+# ===== 筹码稳定度评分（V7.0）=====
+def calc_chip_stability(df):
+    """
+    评估筹码是否被锁定，越稳定说明主力控盘越强
+    振幅小 + 收盘价稳 + 近期量能递增 → 高分
+    """
+    latest = df.iloc[-1]
+    price = latest['收盘']
+    if price <= 0:
+        return 0
+
+    score = 0
+
+    # 1️⃣ 波动率（振幅）：越小越稳定（30分）
+    amplitude = (df['最高'] - df['最低']).tail(10)
+    amp_ratio = amplitude.mean() / price
+    if amp_ratio < 0.03:
+        score += 30
+    elif amp_ratio < 0.05:
+        score += 15
+
+    # 2️⃣ 收盘价稳定性：标准差/均值越小越稳（30分）
+    close_10 = df['收盘'].tail(10)
+    cv = close_10.std() / close_10.mean() if close_10.mean() > 0 else 1
+    if cv < 0.02:
+        score += 30
+    elif cv < 0.04:
+        score += 15
+
+    # 3️⃣ 换手节奏：近5日均量 > 近10日均量（资金在流入）（40分）
+    vol5  = df['成交量'].tail(5).mean()
+    vol10 = df['成交量'].tail(10).mean()
+    if vol10 > 0:
+        if vol5 > vol10 * 1.2:
+            score += 40
+        elif vol5 > vol10:
+            score += 20
+
+    return min(score, 100)
+
+
+# ===== 洗盘 vs 出货判断（V7.0）=====
+def detect_washout_vs_distribution(df):
+    """
+    判断当前回调是"洗盘（健康）"还是"出货（危险）"
+    返回：decision('洗盘'|'出货'|'中性'), confidence(0-100), tags(证据列表)
+    """
+    if len(df) < 30:
+        return "中性", 0, ["样本不足"]
+
+    latest = df.iloc[-1]
+    prev   = df.iloc[-2]
+
+    price  = latest['收盘']
+    open_p = latest['开盘']
+    high   = latest['最高']
+    low    = latest['最低']
+    vol    = latest['成交量']
+
+    ma10    = latest['MA10']
+    ma20    = latest['MA20']
+    rsi     = latest['RSI']
+    vol_ma5 = latest['VOL_MA5']
+    vol_ma10= latest['VOL_MA10']
+
+    high_20 = df['最高'].tail(20).max()
+
+    score = 0
+    tags  = []
+
+    # ===== 洗盘特征（加分）=====
+
+    # 未破位（MA10或MA20仍在价格下方）
+    if price > ma10 or price > ma20:
+        score += 20
+        tags.append("未破位")
+
+    # 回调缩量
+    if vol < vol_ma5:
+        score += 15
+        tags.append("缩量回调")
+
+    # 下影线承接（用 min(开盘,收盘) 正确计算）
+    lower_shadow = (min(open_p, price) - low) / price if price > 0 else 0
+    if lower_shadow > 0.02:
+        score += 10
+        tags.append("下影承接")
+
+    # 跌幅可控（当日跌幅在0-4%之间）
+    drop_pct = (prev['收盘'] - price) / prev['收盘'] if prev['收盘'] > 0 else 0
+    if 0 < drop_pct < 0.04:
+        score += 10
+        tags.append("跌幅可控")
+
+    # ===== 出货特征（减分）=====
+
+    # 高位滞涨放量（接近前高但收阴）
+    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and price <= open_p:
+        score -= 35
+        tags.append("高位放量滞涨")
+
+    # 上影线抛压（用 max(开盘,收盘) 正确计算）
+    upper_shadow = (high - max(open_p, price)) / price if price > 0 else 0
+    if upper_shadow > 0.03:
+        score -= 15
+        tags.append("上影抛压")
+
+    # 跌破MA20支撑
+    if price < ma20:
+        score -= 25
+        tags.append("跌破支撑")
+
+    # 放量下跌
+    if vol > vol_ma10 * 1.3 and price < prev['收盘']:
+        score -= 20
+        tags.append("放量下跌")
+
+    # RSI高位风险
+    if rsi > 75:
+        score -= 10
+        tags.append("高位风险")
+
+    # ===== 结论 =====
+    if score >= 30:
+        decision = "洗盘"
+    elif score <= -30:
+        decision = "出货"
+    else:
+        decision = "中性"
+
+    confidence = min(abs(score), 100)
+    return decision, confidence, tags
+
+
+# ===== 主力控盘识别（V7.1，仅展示不计分）=====
+def detect_main_control(df):
+    """
+    识别主力控盘阶段和行为特征
+    返回：phase(阶段), score(强度0-100), tags(行为标签)
+    仅用于展示，不纳入评分链
+    """
+    latest = df.iloc[-1]
+
+    price  = latest['收盘']
+    open_p = latest['开盘']
+    high   = latest['最高']
+    low    = latest['最低']
+    vol    = latest['成交量']
+
+    vol_ma5 = latest['VOL_MA5']
+    vol_ma10= latest['VOL_MA10']
+    rsi     = latest['RSI']
+
+    low_20  = df['最低'].tail(20).min()
+    high_20 = df['最高'].tail(20).max()
+
+    score = 0
+    tags  = []
+
+    # 吸筹：低位缩量
+    if price <= low_20 * 1.08 and vol < vol_ma5 * 0.8:
+        score += 25
+        tags.append("吸筹")
+
+    # 锁仓：振幅收敛
+    amp_ratio = (df['最高'] - df['最低']).tail(10).mean() / price if price > 0 else 1
+    if amp_ratio < 0.03:
+        score += 20
+        tags.append("锁仓")
+
+    # 洗盘：下影线 + 未跌破低位
+    lower_shadow = (min(open_p, price) - low) / price if price > 0 else 0
+    if lower_shadow > 0.03 and price > low_20 * 1.05:
+        score += 15
+        tags.append("洗盘")
+
+    # 拉升：放量接近或突破前高
+    if price >= high_20 * 0.97 and vol > vol_ma10 * 1.2:
+        score += 30
+        tags.append("拉升")
+
+    # 出货：高位放量但收阴
+    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and price <= open_p:
+        score -= 35
+        tags.append("出货")
+
+    # 超买修正
+    if rsi > 80:
+        score -= 10
+        tags.append("超买风险")
+
+    score = max(0, min(100, score))
+
+    if score >= 70:
+        phase = "高度控盘"
+    elif score >= 50:
+        phase = "中度控盘"
+    elif score >= 30:
+        phase = "弱控盘"
+    else:
+        phase = "无控盘"
+
+    return phase, score, tags
+
 # ===== 交易信号解释（中文化）=====
 def explain_trade_logic(score, money_score, rsi):
 
@@ -1157,7 +1376,7 @@ def get_institution_ratings(stock_code):
     except Exception as e:
         msg = str(e)
         if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
-            return None, "⚠️ Tushare 积分不足（机构评级需要2000+积分），暂时无法获取"
+            return None, "⚠️ 机构评级暂不可用（积分不足或共享Token被限流，需独享2000+积分账号）"
         return None, f"❌ 机构评级获取失败：{translate_error(e)}"
 
 
@@ -1411,8 +1630,9 @@ with tab_analyze:
 
                 _prog.progress(45, text="多维度评分中...")
                 base_score, _, _, _, _ = calculate_score_v2(df, price, low_20, high_20, mode_type)
-                mf_score      = multi_factor_score(df)
-                combined_score = int(base_score * 0.6 + mf_score * 0.4)
+                mf_score       = multi_factor_score(df)
+                chip_score     = calc_chip_stability(df)
+                combined_score = int(base_score * 0.55 + mf_score * 0.35 + chip_score * 0.1)
                 start_signal, start_level, start_strength = detect_start_signal(df)
                 final_score, phase = unified_decision(df, combined_score, money_state, money_score)
 
@@ -1447,7 +1667,16 @@ with tab_analyze:
                     start_bonus = 0
 
                 # ===== 第8步：最终评分修正（所有维度汇总）=====
-                final_score = max(0, min(100, final_score + ratings_bonus + start_bonus))
+                # 洗盘/出货判断（修正幅度有上限）
+                wd_decision, wd_conf, wd_tags = detect_washout_vs_distribution(df)
+                if wd_decision == "洗盘":
+                    wd_bonus = min(int(wd_conf * 0.08), 8)   # 最多+8
+                elif wd_decision == "出货":
+                    wd_bonus = -min(int(wd_conf * 0.12), 12) # 最多-12
+                else:
+                    wd_bonus = 0
+
+                final_score = max(0, min(100, final_score + ratings_bonus + start_bonus + wd_bonus))
 
                 # ===== 第9步：生成交易信号 =====
                 final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
@@ -1459,8 +1688,9 @@ with tab_analyze:
                 if stop_loss is not None:
                     stop_loss = update_trailing_stop(stock_code, stop_loss)
 
-                # ===== 第11步：持仓结构（仅展示，不计分）=====
+                # ===== 第11步：主力控盘（展示，不计分）+ 持仓结构 =====
                 _prog.progress(80, text="获取持仓数据...")
+                ctrl_phase, ctrl_score, ctrl_tags = detect_main_control(df)
                 holdings_df, holdings_src = get_holding_structure(stock_code)
 
                 # ===== GPT分析（完整 + 热点判断）=====
@@ -1511,8 +1741,10 @@ with tab_analyze:
     【系统评分】
     基础评分：{base_score}/100
     多因子评分：{mf_score}/100
+    筹码稳定度：{chip_score}/100
     机构评级加成：{ratings_bonus:+d}
     启动信号加成：{start_bonus:+d}
+    洗盘/出货修正：{wd_bonus:+d}（判断：{wd_decision}，置信度{wd_conf}%，依据：{'、'.join(wd_tags)}）
     融合评分：{final_score}/100
     当前阶段：{phase}
 
@@ -1520,6 +1752,12 @@ with tab_analyze:
     【资金行为（核心）】
     主力状态：{money_state}
     资金强度：{money_score}/100
+
+    ==============================
+    【主力控盘（参考）】
+    控盘阶段：{ctrl_phase}
+    控盘强度：{ctrl_score}/100
+    行为特征：{'、'.join(ctrl_tags) if ctrl_tags else '无明显特征'}
 
     ======================================
 
@@ -1739,6 +1977,24 @@ with tab_analyze:
                                     config={"scrollZoom": False,
                                             "doubleClick": False,
                                             "displayModeBar": False})
+
+                # ===== 主力控盘（展示，不计分）=====
+                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🎯 主力控盘</div>', unsafe_allow_html=True)
+                mc1, mc2 = st.columns(2)
+                mc1.metric("控盘阶段", ctrl_phase)
+                mc2.metric("控盘强度", f"{ctrl_score}/100")
+                if ctrl_tags:
+                    st.caption("行为特征：" + "　/　".join(ctrl_tags))
+
+                # ===== 洗盘 vs 出货（展示 + 已计入评分）=====
+                st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">⚖️ 洗盘 vs 出货</div>', unsafe_allow_html=True)
+                wd1, wd2 = st.columns(2)
+                wd1.metric("判断结果", wd_decision)
+                wd2.metric("置信度", f"{wd_conf}%")
+                if wd_tags:
+                    st.caption("依据：" + "　/　".join(wd_tags))
+                if wd_bonus != 0:
+                    st.caption(f"评分修正：{wd_bonus:+d}分")
 
                 # ===== 持仓结构饼图 =====
                 st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
