@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.5</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.8</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,9 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V8.8** 机构评级三大关键信号真正落地：①卖出评级检测②近30天覆盖突增检测③目标价 vs 现价空间计算，触发时明确提示，未触发也说明原因<br>
+**V8.7** 机构评级说明升级：按覆盖数量分级解读（1家/2-4家/5-9家/10家+），加使用须知（A股买入评级占96%的行业背景），关注卖出评级和覆盖数量突增才是真信号<br>
+**V8.6** 持仓数据源升级：主接口改为 top10_holders（前十大股东，积分要求低），次接口 top10_floatholders（前十大流通股东），JoinQuant 降为第三级备用<br>
 **V8.5** 机构评级加动态解读说明（分布→结论→评分加成），无数据时说明原因；评级已实现"有数据加分、无数据跳过"的条件评分机制<br>
 **V8.4** 选股结果持久化（session_state），切 Tab 回来结果还在<br>
 **V8.3** 自动选股实时显示所有候选股，按评分降序动态更新<br>
@@ -1596,14 +1599,20 @@ def get_institution_ratings(stock_code):
         ts.set_token(token)
         pro = ts.pro_api()
         ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+        # 加入目标价字段，取更多条记录用于统计趋势
         df = pro.report_rc(
             ts_code=ts_code,
-            fields="report_date,brokerage,analyst,rating,rating_change"
+            fields="report_date,brokerage,analyst,rating,rating_change,price_change,price"
         )
         if df is not None and not df.empty:
-            df = df.head(8).rename(columns={
-                "report_date": "日期", "brokerage": "机构",
-                "analyst": "分析师", "rating": "评级", "rating_change": "变动"
+            df = df.rename(columns={
+                "report_date":  "日期",
+                "brokerage":    "机构",
+                "analyst":      "分析师",
+                "rating":       "评级",
+                "rating_change":"变动",
+                "price_change": "目标价涨幅%",
+                "price":        "目标价",
             })
             return df, "Tushare"
         return None, "⚠️ Tushare 暂无该股票评级数据"
@@ -1614,29 +1623,60 @@ def get_institution_ratings(stock_code):
         return None, f"❌ 机构评级获取失败：{translate_error(e)}"
 
 
-# ===== 持仓结构（Tushare主 + AKShare备，季度级）=====
+# ===== 持仓结构（Tushare 主 + JoinQuant 备）=====
 def get_holding_structure(stock_code):
 
-    # ── 主：Tushare top_inst（积分足时优先）──
     token = st.secrets.get("TUSHARE_TOKEN")
+
+    # ── 主：Tushare top10_holders（前十大股东，季报，积分要求低）──
     if token:
         try:
             import tushare as ts
             ts.set_token(token)
             pro = ts.pro_api()
             ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
-            trade_date = datetime.now().strftime("%Y%m%d")
-            df = pro.top_inst(ts_code=ts_code, trade_date=trade_date)
+            df = pro.top10_holders(ts_code=ts_code, limit=10)
             if df is not None and not df.empty:
-                return df.head(10), "Tushare"
+                # 保留有意义的列
+                keep = [c for c in ["end_date", "holder_name", "hold_amount", "hold_ratio"]
+                        if c in df.columns]
+                df = df[keep].rename(columns={
+                    "end_date":    "报告期",
+                    "holder_name": "股东名称",
+                    "hold_amount": "持股数量",
+                    "hold_ratio":  "持股比例%",
+                })
+                log_info(f"✅ Tushare top10_holders 获取成功：{stock_code}")
+                return df.head(10), "Tushare 前十大股东（季报）"
         except Exception as e:
             msg = str(e)
-            if any(k in msg for k in ["积分", "权限", "2000", "license", "Permission"]):
-                log_info("⚠️ Tushare 持仓积分不足")
+            if any(k in msg for k in ["积分", "权限", "license", "Permission"]):
+                log_info("⚠️ Tushare 持仓积分不足，切换备用")
             else:
-                log_info(f"⚠️ Tushare 持仓失败（{e}）")
+                log_info(f"⚠️ Tushare top10_holders 失败（{e}），切换备用")
 
-    # ── 补充：JoinQuant（当前免费版不含 finance 表，已关闭）──
+        # ── 次：Tushare top10_floatholders（前十大流通股东）──
+        try:
+            import tushare as ts
+            ts.set_token(token)
+            pro = ts.pro_api()
+            ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
+            df = pro.top10_floatholders(ts_code=ts_code, limit=10)
+            if df is not None and not df.empty:
+                keep = [c for c in ["end_date", "holder_name", "hold_amount", "hold_ratio"]
+                        if c in df.columns]
+                df = df[keep].rename(columns={
+                    "end_date":    "报告期",
+                    "holder_name": "股东名称",
+                    "hold_amount": "持股数量",
+                    "hold_ratio":  "持股比例%",
+                })
+                log_info(f"✅ Tushare top10_floatholders 获取成功：{stock_code}")
+                return df.head(10), "Tushare 前十大流通股东（季报）"
+        except Exception as e:
+            log_info(f"⚠️ Tushare top10_floatholders 也失败（{e}）")
+
+    # ── 备：JoinQuant（开关控制）──
     if ENABLE_JQDATA_HOLDINGS:
         jq_user = st.secrets.get("JQ_USERNAME")
         jq_pass = st.secrets.get("JQ_PASSWORD")
@@ -1657,7 +1697,7 @@ def get_holding_structure(stock_code):
                     if not (expected - set(df.columns)):
                         df = df.rename(columns={
                             "shareholder_name": "股东名称", "period": "报告期",
-                            "holding_amount": "持股数量", "holding_ratio": "持股比例%",
+                            "holding_amount":   "持股数量", "holding_ratio": "持股比例%",
                         })
                         keep = [c for c in ["股东名称", "报告期", "持股数量", "持股比例%"] if c in df.columns]
                         return df[keep], "JoinQuant 前十大股东（季报）"
@@ -1665,7 +1705,7 @@ def get_holding_structure(stock_code):
             except Exception as e:
                 log_info(f"⚠️ JoinQuant 持仓失败（{e}）")
 
-    return None, "⚠️ 持仓数据暂不可用（当前环境数据源限制）"
+    return None, "⚠️ 持仓数据暂不可用（Tushare 积分不足，JoinQuant 已关闭）"
 
 
 # ===== 星级评级 =====
@@ -2370,23 +2410,77 @@ with tab_analyze:
                         )
                         st.markdown(rating_html, unsafe_allow_html=True)
 
-                        # 动态说明：根据评级分布给出解读
-                        total_r = buy_cnt + hold_cnt + sell_cnt
+                        # ── 三大关键信号判断 ──────────────────────────
+                        signals = []
+
+                        # 信号①：卖出评级（稀有负面信号）
                         if sell_cnt > 0:
-                            rating_tip = f"⚠️ {sell_cnt} 家机构给出卖出/减持评级，需谨慎对待"
+                            signals.append(f"🚨 **信号①** 出现 {sell_cnt} 家卖出/减持评级（A股此类评级不足0.1%，是真实风险警告）")
+
+                        # 信号②：近30天评级数量突增
+                        if "日期" in ratings_df.columns:
+                            try:
+                                cutoff = (datetime.now() - pd.Timedelta(days=30)).strftime("%Y%m%d")
+                                recent_cnt = int((ratings_df["日期"].astype(str) >= cutoff).sum())
+                                older_cnt  = total_r - recent_cnt
+                                if recent_cnt >= 3 and recent_cnt > older_cnt:
+                                    signals.append(f"📈 **信号②** 近30天新增 {recent_cnt} 家评级，明显多于更早期的 {older_cnt} 家，机构正在集中关注")
+                                elif recent_cnt >= 5:
+                                    signals.append(f"📈 **信号②** 近30天有 {recent_cnt} 家机构发布评级，关注热度较高")
+                            except:
+                                pass
+
+                        # 信号③：目标价明显高于现价
+                        if "目标价涨幅%" in ratings_df.columns:
+                            try:
+                                avg_upside = ratings_df["目标价涨幅%"].dropna().astype(float).mean()
+                                if avg_upside >= 20:
+                                    signals.append(f"🎯 **信号③** 机构平均目标价涨幅 {avg_upside:.0f}%，显著高于现价，机构预期强烈")
+                                elif avg_upside >= 10:
+                                    signals.append(f"📊 **信号③** 机构平均目标价涨幅 {avg_upside:.0f}%，有一定上涨空间")
+                            except:
+                                pass
+                        elif "目标价" in ratings_df.columns:
+                            try:
+                                avg_tp = ratings_df["目标价"].dropna().astype(float).mean()
+                                if avg_tp > 0 and price > 0:
+                                    upside = (avg_tp - price) / price * 100
+                                    if upside >= 20:
+                                        signals.append(f"🎯 **信号③** 机构平均目标价 {avg_tp:.2f}（较现价 {price:.2f} 高 {upside:.0f}%），预期强烈")
+                                    elif upside >= 10:
+                                        signals.append(f"📊 **信号③** 机构平均目标价 {avg_tp:.2f}（较现价高 {upside:.0f}%），有上涨空间")
+                                    elif upside < 0:
+                                        signals.append(f"⚠️ **信号③** 机构平均目标价 {avg_tp:.2f} 低于现价 {price:.2f}，空间已透支")
+                            except:
+                                pass
+
+                        # 汇总信号
+                        if signals:
+                            st.info("**🔍 关键信号（真正值得关注的三点）**\n\n" + "\n\n".join(signals))
+                        else:
+                            st.caption("暂未触发三大关键信号（无卖出评级 / 覆盖无突增 / 目标价空间有限）")
+
+                        # 覆盖数量分级解读
+                        if sell_cnt > 0:
+                            rating_tip = f"⚠️ 有 {sell_cnt} 家给出卖出/减持，这是少见的负面信号（A股卖出评级不足0.1%），需认真对待"
                             rating_style = st.warning
-                        elif buy_cnt >= total_r * 0.8:
-                            rating_tip = f"✅ {buy_cnt}/{total_r} 家机构看多（买入/增持），机构共识较强"
+                        elif total_r >= 10:
+                            if buy_cnt >= total_r * 0.8:
+                                rating_tip = f"✅ {buy_cnt}/{total_r} 家机构覆盖且看多，属于龙头股级别的机构关注度，共识强烈"
+                            else:
+                                rating_tip = f"📊 {total_r} 家机构覆盖，关注度高，但内部有分歧，需结合技术面判断"
                             rating_style = st.success
-                        elif buy_cnt >= total_r * 0.5:
-                            rating_tip = f"📊 {buy_cnt}/{total_r} 家机构看多，多数偏积极但分歧存在"
+                        elif total_r >= 5:
+                            rating_tip = f"📊 {buy_cnt}/{total_r} 家机构看多，覆盖数量中等偏上（5家以上说明机构有兴趣），可作参考"
+                            rating_style = st.info
+                        elif total_r >= 2:
+                            rating_tip = f"💡 {total_r} 家机构覆盖属于正常水平，买入为主但样本较少，参考价值有限"
                             rating_style = st.info
                         else:
-                            rating_tip = f"⚠️ 机构看法分歧较大，多空各执一词，谨慎参考"
+                            rating_tip = f"💡 仅 {total_r} 家机构覆盖，样本过少，不宜单独作为决策依据"
                             rating_style = st.warning
 
-                        # 显示评分加成
-                        bonus_tip = f"　｜　本次评分加成：{ratings_bonus:+d}分" if ratings_bonus != 0 else "　｜　评分加成：±0（中性）"
+                        bonus_tip = f"　｜　本次评分加成：{ratings_bonus:+d}分" if ratings_bonus != 0 else "　｜　评分加成：±0"
                         rating_style(rating_tip + bonus_tip)
 
                     # 显示评级明细表（精简列）
