@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.2</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V7.3</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -1980,21 +1980,30 @@ with tab_analyze:
 
                 # ===== 主力控盘（展示，不计分）=====
                 st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🎯 主力控盘</div>', unsafe_allow_html=True)
-                mc1, mc2 = st.columns(2)
-                mc1.metric("控盘阶段", ctrl_phase)
-                mc2.metric("控盘强度", f"{ctrl_score}/100")
+                phase_color = {"高度控盘":"#ef4444","中度控盘":"#f59e0b","弱控盘":"#38bdf8","无控盘":"#94a3b8"}.get(ctrl_phase,"#64748b")
+                ctrl_html = (
+                    '<div style="display:flex;gap:10px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">控盘阶段</div><div style="font-size:15px;font-weight:700;color:{phase_color}">{ctrl_phase}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">控盘强度</div><div style="font-size:15px;font-weight:700;color:{phase_color}">{ctrl_score}/100</div></div>' +
+                    '</div>'
+                )
+                st.markdown(ctrl_html, unsafe_allow_html=True)
                 if ctrl_tags:
-                    st.caption("行为特征：" + "　/　".join(ctrl_tags))
+                    st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">行为特征：{"　/　".join(ctrl_tags)}</div>', unsafe_allow_html=True)
 
                 # ===== 洗盘 vs 出货（展示 + 已计入评分）=====
                 st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">⚖️ 洗盘 vs 出货</div>', unsafe_allow_html=True)
-                wd1, wd2 = st.columns(2)
-                wd1.metric("判断结果", wd_decision)
-                wd2.metric("置信度", f"{wd_conf}%")
+                wd_color = {"洗盘":"#22c55e","出货":"#ef4444","中性":"#94a3b8"}.get(wd_decision,"#64748b")
+                wd_html = (
+                    '<div style="display:flex;gap:10px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">判断结果</div><div style="font-size:15px;font-weight:700;color:{wd_color}">{wd_decision}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">置信度</div><div style="font-size:15px;font-weight:700;color:{wd_color}">{wd_conf}%</div></div>' +
+                    '</div>'
+                )
+                st.markdown(wd_html, unsafe_allow_html=True)
                 if wd_tags:
-                    st.caption("依据：" + "　/　".join(wd_tags))
-                if wd_bonus != 0:
-                    st.caption(f"评分修正：{wd_bonus:+d}分")
+                    bonus_str = f"　评分修正：{wd_bonus:+d}分" if wd_bonus != 0 else ""
+                    st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin-bottom:8px">依据：{"　/　".join(wd_tags)}{bonus_str}</div>', unsafe_allow_html=True)
 
                 # ===== 持仓结构饼图 =====
                 st.markdown('<div style="font-size:18px;font-weight:700;margin:16px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
@@ -2030,10 +2039,14 @@ with tab_analyze:
                         buy_cnt  = int(ratings_df[rating_col].astype(str).str.contains("买入|增持|推荐").sum())
                         sell_cnt = int(ratings_df[rating_col].astype(str).str.contains("卖出|减持").sum())
                         hold_cnt = len(ratings_df) - buy_cnt - sell_cnt
-                        r1, r2, r3 = st.columns(3)
-                        r1.metric("🟢 买入/增持", buy_cnt)
-                        r2.metric("🟡 中性/持有", hold_cnt)
-                        r3.metric("🔴 卖出/减持", sell_cnt)
+                        rating_html = (
+                            '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+                            f'<div style="flex:1;background:#fef2f2;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🟢 买入/增持</div><div style="font-size:16px;font-weight:700;color:#ef4444">{buy_cnt}</div></div>' +
+                            f'<div style="flex:1;background:#fefce8;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🟡 中性/持有</div><div style="font-size:16px;font-weight:700;color:#f59e0b">{hold_cnt}</div></div>' +
+                            f'<div style="flex:1;background:#f0fdf4;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🔴 卖出/减持</div><div style="font-size:16px;font-weight:700;color:#22c55e">{sell_cnt}</div></div>' +
+                            '</div>'
+                        )
+                        st.markdown(rating_html, unsafe_allow_html=True)
                     st.dataframe(ratings_df, width='stretch', hide_index=True)
                 else:
                     st.warning(ratings_src)
@@ -2046,13 +2059,15 @@ with tab_analyze:
                     f'{final_signal}{"（" + buy_tag + "）" if buy_tag else ""}</span></div>',
                     unsafe_allow_html=True
                 )
-                sc1, sc2, sc3 = st.columns(3)
+                price_items = []
                 if buy_price:
-                    sc1.metric("建议买点", buy_price)
+                    price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">建议买点</div><div style="font-size:15px;font-weight:700;color:#ef4444">{buy_price}</div></div>')
                 if stop_loss:
-                    sc2.metric("止损位", stop_loss)
+                    price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">止损位</div><div style="font-size:15px;font-weight:700;color:#f59e0b">{stop_loss}</div></div>')
                 if take_profit:
-                    sc3.metric("止盈位", take_profit)
+                    price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">止盈位</div><div style="font-size:15px;font-weight:700;color:#22c55e">{take_profit}</div></div>')
+                if price_items:
+                    st.markdown('<div style="display:flex;gap:10px;margin-top:8px">' + "".join(price_items) + '</div>', unsafe_allow_html=True)
 
                 # ===== 三栏辅助信息 =====
                 col1, col2, col3 = st.columns(3)
@@ -2156,8 +2171,12 @@ with tab_review:
             profit_cnt = len(df_result[df_result["结果"] == "✅ 盈利"])
             loss_cnt   = len(df_result[df_result["结果"] == "❌ 止损失败"])
             watch_cnt  = len(df_result[df_result["结果"] == "⚠️ 观察中"])
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("共记录", total)
-            c2.metric("✅ 盈利", profit_cnt)
-            c3.metric("⚠️ 观察中", watch_cnt)
-            c4.metric("❌ 止损失败", loss_cnt)
+            review_html = (
+                '<div style="display:flex;gap:8px;margin:10px 0">' +
+                f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">共记录</div><div style="font-size:16px;font-weight:700;color:#1e293b">{total}</div></div>' +
+                f'<div style="flex:1;background:#f0fdf4;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">✅ 盈利</div><div style="font-size:16px;font-weight:700;color:#22c55e">{profit_cnt}</div></div>' +
+                f'<div style="flex:1;background:#fefce8;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">⚠️ 观察中</div><div style="font-size:16px;font-weight:700;color:#f59e0b">{watch_cnt}</div></div>' +
+                f'<div style="flex:1;background:#fef2f2;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">❌ 止损</div><div style="font-size:16px;font-weight:700;color:#ef4444">{loss_cnt}</div></div>' +
+                '</div>'
+            )
+            st.markdown(review_html, unsafe_allow_html=True)
