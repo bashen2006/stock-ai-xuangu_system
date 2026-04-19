@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V8.9</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.1</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,8 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.1** 持仓结构加机构含金量评分（社保40/外资30/险资25/公募15/ETF5），出货预警联动（持仓数据滞后但量价信号实时），洗盘+机构双重确认提示<br>
+**V9.0** 持仓结构加智能解读：自动识别社保/ETF/外资/保险/公募基金，各类机构用大白话解释含义；修复机构评级 total_r 未定义错误<br>
 **V8.9** 机构评级明细表修复：加目标价列、按日期降序排（最新在前）、显示最多15条<br>
 **V8.8** 机构评级三大关键信号真正落地：①卖出评级检测②近30天覆盖突增检测③目标价 vs 现价空间计算，触发时明确提示，未触发也说明原因<br>
 **V8.7** 机构评级说明升级：按覆盖数量分级解读（1家/2-4家/5-9家/10家+），加使用须知（A股买入评级占96%的行业背景），关注卖出评级和覆盖数量突增才是真信号<br>
@@ -2368,28 +2370,95 @@ with tab_analyze:
                     unsafe_allow_html=True
                 )
 
-                # ===== 持仓结构饼图 =====
+                # ===== 持仓结构 =====
                 st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">🗂️ 机构持仓结构</div>', unsafe_allow_html=True)
                 if holdings_df is not None:
-                    st.caption(f"数据来源：{holdings_src}")
-                    col_name = next(
-                        (c for c in holdings_df.columns if "机构" in c or "holder" in c.lower()), None
-                    )
-                    col_val = next(
-                        (c for c in holdings_df.columns if "持股" in c or "数量" in c or "share" in c.lower()), None
-                    )
-                    if col_name and col_val:
-                        fig_pie = px.pie(
-                            holdings_df.head(6),
-                            names=col_name, values=col_val,
-                            title="机构持仓结构（前6）"
-                        )
-                        fig_pie.update_layout(showlegend=True)
-                        st.plotly_chart(fig_pie, width='stretch')
-                    else:
-                        st.dataframe(holdings_df, width='stretch', hide_index=True)
+                    st.caption(f"数据来源：{holdings_src}（季报数据，非实时）")
+                    st.dataframe(holdings_df, width='stretch', hide_index=True)
+
+                    # 智能识别股东类型并给出说明
+                    name_col = next((c for c in holdings_df.columns if "股东" in c or "holder" in c.lower()), None)
+                    ratio_col = next((c for c in holdings_df.columns if "比例" in c or "ratio" in c.lower()), None)
+
+                    if name_col:
+                        names_str = " ".join(holdings_df[name_col].astype(str).tolist())
+                        tips = []
+
+                        # 识别各类机构
+                        has_shebao    = "社保" in names_str or "养老" in names_str
+                        has_etf       = "ETF" in names_str or "指数" in names_str or "沪深300" in names_str or "中证" in names_str
+                        has_qfii      = "QFII" in names_str or "外资" in names_str or "瑞士" in names_str or "贝莱德" in names_str
+                        has_insurance = "保险" in names_str or "人寿" in names_str or "平安" in names_str
+                        has_fund      = "基金" in names_str and not has_etf
+
+                        # 大股东占比
+                        top1_ratio = 0
+                        if ratio_col:
+                            try:
+                                top1_ratio = float(holdings_df[ratio_col].iloc[0])
+                            except:
+                                pass
+
+                        if top1_ratio >= 50:
+                            tips.append(f"🏢 **大股东绝对控股**（第一大股东持股 {top1_ratio:.1f}%）：公司治理稳定，但流通盘较小，股价可能波动较大")
+                        elif top1_ratio >= 30:
+                            tips.append(f"🏢 **大股东相对控股**（第一大股东持股 {top1_ratio:.1f}%）：控制权稳定，公司经营风险较低")
+
+                        if has_shebao:
+                            tips.append("🛡️ **社保/养老金持仓**：国家队长线资金看好，选股标准严格，历史年均收益率约7.4%，是质量股的重要背书")
+                        if has_etf:
+                            tips.append("📊 **指数基金/ETF持仓**：被动跟踪指数，不代表主动看好，但说明该股是重要指数成分股，有长期配置资金托底")
+                        if has_qfii:
+                            tips.append("🌍 **外资（QFII）持仓**：境外长线机构认可，外资偏好业绩稳定、低估值的价值股，是国际认可度的体现")
+                        if has_insurance:
+                            tips.append("💼 **保险资金持仓**：险资追求稳健长期收益，偏好高分红、低波动蓝筹股，持仓周期长、不会轻易卖出")
+                        if has_fund:
+                            tips.append("📈 **公募基金持仓**：主动管理基金的精选个股，说明有专业机构在研究和关注这只股票")
+
+                        if tips:
+                            # 机构含金量评分：不同机构权重不同
+                            quality_score = 0
+                            if has_shebao:    quality_score += 40
+                            if has_qfii:      quality_score += 30
+                            if has_insurance: quality_score += 25
+                            if has_fund:      quality_score += 15
+                            if has_etf:       quality_score += 5
+                            quality_score = min(quality_score, 100)
+
+                            if quality_score >= 60:
+                                quality_tip = f"🏆 机构含金量评分 **{quality_score}/100**（高）：社保/外资/险资等权威机构持仓，历史上此类组合上涨概率显著高于普通股票"
+                                quality_style = st.success
+                            elif quality_score >= 30:
+                                quality_tip = f"📊 机构含金量评分 **{quality_score}/100**（中）：有机构持仓背书，可作参考，但需结合当前技术面判断时机"
+                                quality_style = st.info
+                            else:
+                                quality_tip = f"💡 机构含金量评分 **{quality_score}/100**（低）：以指数基金被动配置为主，主动机构关注度有限"
+                                quality_style = st.info
+
+                            quality_style(quality_tip)
+
+                            # 出货侦测联动说明
+                            if wd_decision == "出货" and wd_conf >= 50:
+                                st.warning(
+                                    f"⚠️ **出货预警（技术面侦测）**：当前「洗盘vs出货」模块检测到出货信号（置信度{wd_conf}%）。"
+                                    "持仓数据显示机构季末仍持有，但**季报数据滞后1-3个月**——机构可能已在近期开始出货，"
+                                    "与技术面信号吻合时需特别警惕。建议优先相信实时的量价信号，而非过期的持仓数据。"
+                                )
+                            elif ctrl_phase in ["高度控盘", "中度控盘"] and wd_decision == "洗盘":
+                                st.success(
+                                    "✅ **机构持仓 + 洗盘信号双重确认**：持仓结构显示优质机构持有，"
+                                    "同时技术面判断为洗盘（非出货），两者共同指向回调是买点而非出逃点。"
+                                )
+
+                            st.info("**📋 持仓结构解读**\n\n" + "\n\n".join(tips) +
+                                    "\n\n> 💡 **关于机构出货侦测**：季报持仓数据滞后1-3个月，看不到实时出货。"
+                                    "本系统通过「洗盘vs出货」模块用量价行为实时推断，**高位放量不涨/放量下跌**是机构出货的最典型信号，"
+                                    "比持仓数据更及时可靠。")
+                        else:
+                            st.caption("💡 以个人/法人大股东为主，机构持仓特征不明显，参考价值有限")
                 else:
                     st.warning(holdings_src)
+                    st.caption("💡 持仓数据暂不可用，不影响其他分析结果")
 
                 # ===== 机构评级（压缩统计）=====
                 st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
@@ -2402,6 +2471,7 @@ with tab_analyze:
                         buy_cnt  = int(ratings_df[rating_col].astype(str).str.contains("买入|增持|推荐").sum())
                         sell_cnt = int(ratings_df[rating_col].astype(str).str.contains("卖出|减持").sum())
                         hold_cnt = len(ratings_df) - buy_cnt - sell_cnt
+                        total_r  = buy_cnt + hold_cnt + sell_cnt
                         rating_html = (
                             '<div style="display:flex;gap:8px;margin-bottom:8px">' +
                             f'<div style="flex:1;background:#fef2f2;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🟢 买入/增持</div><div style="font-size:16px;font-weight:700;color:#ef4444">{buy_cnt}</div></div>' +
