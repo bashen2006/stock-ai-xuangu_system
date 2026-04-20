@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.2</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.3</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.3** 修复交易时间判断：强制使用北京时间（UTC+8），修复境外服务器时区偏差导致的误判；状态提示显示北京时间供核对<br>
 **V9.2** 智能缓存策略：交易时段跳过缓存取最新数据，非交易时段用缓存；自动选股始终走缓存防限流；加强制刷新按钮；统一所有缓存文件用绝对路径；修复 name_*.txt 路径不一致 bug<br>
 **V9.1** 持仓结构加机构含金量评分（社保40/外资30/险资25/公募15/ETF5），出货预警联动（持仓数据滞后但量价信号实时），洗盘+机构双重确认提示<br>
 **V9.0** 持仓结构加智能解读：自动识别社保/ETF/外资/保险/公募基金，各类机构用大白话解释含义；修复机构评级 total_r 未定义错误<br>
@@ -333,9 +334,11 @@ def _industry_path(stock_code):
     return os.path.join(_BASE_DIR, f"industry_{stock_code}.txt")
 
 def is_trading_time():
-    """判断当前是否为 A 股交易时间（工作日 9:30-11:30 / 13:00-15:00）"""
-    now = datetime.now()
-    # 周末直接跳过
+    """判断当前是否为 A 股交易时间，强制使用北京时间（UTC+8）"""
+    from datetime import timezone, timedelta
+    beijing_tz = timezone(timedelta(hours=8))
+    now = datetime.now(beijing_tz)
+    # 周末跳过
     if now.weekday() >= 5:
         return False
     t = now.hour * 60 + now.minute
@@ -1896,11 +1899,14 @@ with tab_analyze:
         else:
             st.info("当前无缓存，下次分析直接获取最新数据")
 
-    # 交易时间提示
+    # 交易时间提示（显示北京时间供核对）
+    from datetime import timezone, timedelta
+    bj_now = datetime.now(timezone(timedelta(hours=8)))
+    bj_str = bj_now.strftime("%H:%M")
     if is_trading_time():
-        st.caption("🟢 当前为交易时段，每次点击「开始分析」将跳过缓存获取最新数据（Tushare 延迟约1-5分钟）")
+        st.caption(f"🟢 交易时段（北京时间 {bj_str}），每次点击「开始分析」将获取最新数据（Tushare 延迟约1-5分钟）")
     else:
-        st.caption("🔴 当前为非交易时段，将使用缓存数据（30分钟内）；如需强制刷新请点击右侧按钮")
+        st.caption(f"🔴 非交易时段（北京时间 {bj_str}），将使用缓存数据；如需强制刷新请点击右侧按钮")
 
     if btn_analyze:
 
