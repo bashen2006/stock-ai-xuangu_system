@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.1</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.2</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.2** 智能缓存策略：交易时段跳过缓存取最新数据，非交易时段用缓存；自动选股始终走缓存防限流；加强制刷新按钮；统一所有缓存文件用绝对路径；修复 name_*.txt 路径不一致 bug<br>
 **V9.1** 持仓结构加机构含金量评分（社保40/外资30/险资25/公募15/ETF5），出货预警联动（持仓数据滞后但量价信号实时），洗盘+机构双重确认提示<br>
 **V9.0** 持仓结构加智能解读：自动识别社保/ETF/外资/保险/公募基金，各类机构用大白话解释含义；修复机构评级 total_r 未定义错误<br>
 **V8.9** 机构评级明细表修复：加目标价列、按日期降序排（最新在前）、显示最多15条<br>
@@ -322,25 +323,38 @@ def save_record(stock_code, price, short_trend, mid_trend, score, advice):
     push_records_to_github()
 
 # ===== 缓存函数 =====
-def load_cache(stock_code):
-    file = f"cache_{stock_code}.csv"
+def _cache_path(stock_code):
+    return os.path.join(_BASE_DIR, f"cache_{stock_code}.csv")
 
+def _name_path(stock_code):
+    return os.path.join(_BASE_DIR, f"name_{stock_code}.txt")
+
+def _industry_path(stock_code):
+    return os.path.join(_BASE_DIR, f"industry_{stock_code}.txt")
+
+def is_trading_time():
+    """判断当前是否为 A 股交易时间（工作日 9:30-11:30 / 13:00-15:00）"""
+    now = datetime.now()
+    # 周末直接跳过
+    if now.weekday() >= 5:
+        return False
+    t = now.hour * 60 + now.minute
+    morning   = (9 * 60 + 30 <= t <= 11 * 60 + 30)
+    afternoon = (13 * 60 <= t <= 15 * 60)
+    return morning or afternoon
+
+def load_cache(stock_code):
+    file = _cache_path(stock_code)
     if not os.path.exists(file):
         return None
-
     try:
         df = pd.read_csv(file)
-
         if "_cached_at" not in df.columns:
-            # 旧格式缓存，没有时间戳，直接视为过期
             return None
-
         cached_at = float(df["_cached_at"].iloc[0])
         if time.time() - cached_at > 1800:
             return None
-
         return df.drop(columns=["_cached_at"])
-
     except:
         return None
 
@@ -348,34 +362,41 @@ def load_cache(stock_code):
 def save_cache(stock_code, df, stock_name=None):
     df = df.copy()
     df["_cached_at"] = time.time()
-    df.to_csv(f"cache_{stock_code}.csv", index=False)
+    df.to_csv(_cache_path(stock_code), index=False)
     if stock_name and stock_name != stock_code:
-        with open(f"name_{stock_code}.txt", "w", encoding="utf-8") as f:
+        with open(_name_path(stock_code), "w", encoding="utf-8") as f:
             f.write(stock_name)
 
 # ===== TuShare数据获取（Tushare主 + AKShare备）=====
-def get_stock_data(stock_code):
+def get_stock_data(stock_code, use_cache_always=False):
+    """
+    use_cache_always=True：自动选股模式，始终优先缓存，避免限流
+    use_cache_always=False：单股分析模式，交易时间跳过缓存取最新数据
+    """
     import tushare as ts
 
-    # ===== 缓存命中 =====
+    # ===== 缓存命中逻辑 =====
     cache_df = load_cache(stock_code)
     if cache_df is not None:
-        log_info(f"✔ 缓存命中：{stock_code}")
-        cached_name = stock_code
-        try:
-            with open(os.path.join(_BASE_DIR, f"name_{stock_code}.txt"), encoding="utf-8") as f:
-                cached_name = f.read().strip() or stock_code
-        except:
-            pass
-        cached_industry = ''
-        try:
-            with open(os.path.join(_BASE_DIR, f"industry_{stock_code}.txt"), encoding="utf-8") as f:
-                cached_industry = f.read().strip()
-        except:
-            pass
-        # 把 industry 写到 get_stock_data 的外层变量里
-        # 用 nonlocal 方式不可行，改为返回三元组后在调用处拆包
-        return cache_df, cached_name, cached_industry
+        # 自动选股：始终用缓存
+        # 单股分析：非交易时间用缓存，交易时间跳过缓存
+        if use_cache_always or not is_trading_time():
+            log_info(f"✔ 缓存命中：{stock_code}（{'选股模式' if use_cache_always else '非交易时段'}）")
+            cached_name = stock_code
+            try:
+                with open(_name_path(stock_code), encoding="utf-8") as f:
+                    cached_name = f.read().strip() or stock_code
+            except:
+                pass
+            cached_industry = ''
+            try:
+                with open(_industry_path(stock_code), encoding="utf-8") as f:
+                    cached_industry = f.read().strip()
+            except:
+                pass
+            return cache_df, cached_name, cached_industry
+        else:
+            log_info(f"⏱ 交易时段，跳过缓存，获取最新数据：{stock_code}")
 
     # ===== 主接口：Tushare Pro =====
     token = st.secrets.get("TUSHARE_TOKEN")
@@ -462,10 +483,9 @@ def get_stock_data(stock_code):
             return None, None, ''
 
     save_cache(stock_code, df, stock_name)
-    # 同时缓存行业信息
     if stock_industry:
         try:
-            with open(os.path.join(_BASE_DIR, f"industry_{stock_code}.txt"), "w", encoding="utf-8") as f:
+            with open(_industry_path(stock_code), "w", encoding="utf-8") as f:
                 f.write(stock_industry)
         except:
             pass
@@ -603,12 +623,8 @@ def auto_select_stocks(stock_list, mode_type):
                 time.sleep(wait)
             last_call_time = time.time()
 
-            df, stock_name, stock_industry = get_stock_data(stock_code)
+            df, stock_name, stock_industry = get_stock_data(stock_code, use_cache_always=True)
             if df is None or df.empty:
-                continue
-
-            df = calculate_indicators(df)
-            if not filter_stocks(df, mode_type):
                 continue
 
             # 筹码稳定度过滤（太不稳定跳过）
@@ -1864,7 +1880,29 @@ tab_analyze, tab_select, tab_review = st.tabs(["📈 单股分析", "🤖 自动
 with tab_analyze:
     stock_code = st.text_input("请输入股票代码（如：000001）", key="stock_code_input")
 
-    if st.button("开始分析", key="btn_analyze"):
+    col_btn1, col_btn2 = st.columns([2, 1])
+    with col_btn1:
+        btn_analyze = st.button("开始分析", key="btn_analyze")
+    with col_btn2:
+        btn_refresh = st.button("🔄 强制刷新行情", key="btn_refresh",
+                                help="清除本地缓存，重新拉取最新数据")
+
+    # 强制刷新：清除该股缓存
+    if btn_refresh and stock_code and stock_code.isdigit() and len(stock_code) == 6:
+        cache_file = _cache_path(stock_code)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+            st.success(f"✅ 已清除 {stock_code} 的缓存，下次分析将获取最新数据")
+        else:
+            st.info("当前无缓存，下次分析直接获取最新数据")
+
+    # 交易时间提示
+    if is_trading_time():
+        st.caption("🟢 当前为交易时段，每次点击「开始分析」将跳过缓存获取最新数据（Tushare 延迟约1-5分钟）")
+    else:
+        st.caption("🔴 当前为非交易时段，将使用缓存数据（30分钟内）；如需强制刷新请点击右侧按钮")
+
+    if btn_analyze:
 
         if st.session_state.analyze_running:
             st.warning("⚠️ 正在分析中，请稍候")
