@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.3</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.4</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.4** 缓存策略修正：工作日始终跳缓存（含午休和收盘后），确保每次都显示今日最新收盘价；周末/假日才用缓存；状态提示显示周几+时间<br>
 **V9.3** 修复交易时间判断：强制使用北京时间（UTC+8），修复境外服务器时区偏差导致的误判；状态提示显示北京时间供核对<br>
 **V9.2** 智能缓存策略：交易时段跳过缓存取最新数据，非交易时段用缓存；自动选股始终走缓存防限流；加强制刷新按钮；统一所有缓存文件用绝对路径；修复 name_*.txt 路径不一致 bug<br>
 **V9.1** 持仓结构加机构含金量评分（社保40/外资30/险资25/公募15/ETF5），出货预警联动（持仓数据滞后但量价信号实时），洗盘+机构双重确认提示<br>
@@ -333,12 +334,18 @@ def _name_path(stock_code):
 def _industry_path(stock_code):
     return os.path.join(_BASE_DIR, f"industry_{stock_code}.txt")
 
-def is_trading_time():
-    """判断当前是否为 A 股交易时间，强制使用北京时间（UTC+8）"""
+def is_trading_day():
+    """判断今天是否为交易日（工作日），使用北京时间。不含节假日判断（Tushare无免费节假日接口）"""
     from datetime import timezone, timedelta
     beijing_tz = timezone(timedelta(hours=8))
     now = datetime.now(beijing_tz)
-    # 周末跳过
+    return now.weekday() < 5  # 0-4 = 周一到周五
+
+def is_trading_time():
+    """判断当前是否为盘中（用于提示，不影响缓存策略）"""
+    from datetime import timezone, timedelta
+    beijing_tz = timezone(timedelta(hours=8))
+    now = datetime.now(beijing_tz)
     if now.weekday() >= 5:
         return False
     t = now.hour * 60 + now.minute
@@ -381,10 +388,10 @@ def get_stock_data(stock_code, use_cache_always=False):
     # ===== 缓存命中逻辑 =====
     cache_df = load_cache(stock_code)
     if cache_df is not None:
-        # 自动选股：始终用缓存
-        # 单股分析：非交易时间用缓存，交易时间跳过缓存
-        if use_cache_always or not is_trading_time():
-            log_info(f"✔ 缓存命中：{stock_code}（{'选股模式' if use_cache_always else '非交易时段'}）")
+        # 自动选股：始终用缓存（防止300支轮询被限流）
+        # 单股分析：周末用缓存（无新数据），工作日跳缓存（获取最新收盘/实时数据）
+        if use_cache_always or not is_trading_day():
+            log_info(f"✔ 缓存命中：{stock_code}（{'选股模式' if use_cache_always else '周末/假日'}）")
             cached_name = stock_code
             try:
                 with open(_name_path(stock_code), encoding="utf-8") as f:
@@ -399,7 +406,7 @@ def get_stock_data(stock_code, use_cache_always=False):
                 pass
             return cache_df, cached_name, cached_industry
         else:
-            log_info(f"⏱ 交易时段，跳过缓存，获取最新数据：{stock_code}")
+            log_info(f"⏱ 工作日，跳过缓存获取最新数据：{stock_code}")
 
     # ===== 主接口：Tushare Pro =====
     token = st.secrets.get("TUSHARE_TOKEN")
@@ -1903,10 +1910,14 @@ with tab_analyze:
     from datetime import timezone, timedelta
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     bj_str = bj_now.strftime("%H:%M")
-    if is_trading_time():
-        st.caption(f"🟢 交易时段（北京时间 {bj_str}），每次点击「开始分析」将获取最新数据（Tushare 延迟约1-5分钟）")
+    weekday_cn = ["周一","周二","周三","周四","周五","周六","周日"][bj_now.weekday()]
+    if is_trading_day():
+        if is_trading_time():
+            st.caption(f"🟢 交易时段（北京时间 {weekday_cn} {bj_str}），每次分析获取最新实时数据")
+        else:
+            st.caption(f"🟡 交易日非盘中（北京时间 {weekday_cn} {bj_str}，午休或已收盘），每次分析获取今日最新收盘价")
     else:
-        st.caption(f"🔴 非交易时段（北京时间 {bj_str}），将使用缓存数据；如需强制刷新请点击右侧按钮")
+        st.caption(f"🔴 周末/假日（北京时间 {weekday_cn} {bj_str}），使用缓存数据；如需刷新请点击右侧按钮")
 
     if btn_analyze:
 
