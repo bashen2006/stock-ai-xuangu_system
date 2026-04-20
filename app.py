@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.4</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.5</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.5** 补充实时行情：pro_bar日K不含当天数据，用 ts.get_realtime_quotes() 补充今日实时价；交易日分析时价格始终是最新当天数据<br>
 **V9.4** 缓存策略修正：工作日始终跳缓存（含午休和收盘后），确保每次都显示今日最新收盘价；周末/假日才用缓存；状态提示显示周几+时间<br>
 **V9.3** 修复交易时间判断：强制使用北京时间（UTC+8），修复境外服务器时区偏差导致的误判；状态提示显示北京时间供核对<br>
 **V9.2** 智能缓存策略：交易时段跳过缓存取最新数据，非交易时段用缓存；自动选股始终走缓存防限流；加强制刷新按钮；统一所有缓存文件用绝对路径；修复 name_*.txt 路径不一致 bug<br>
@@ -440,10 +441,48 @@ def get_stock_data(stock_code, use_cache_always=False):
                         "high": "最高", "low": "最低",
                         "close": "收盘", "vol": "成交量"
                     })
-                    # trade_date 是 "20260418" 格式，强制转为日期
                     df["日期"] = pd.to_datetime(df["日期"], format="%Y%m%d", errors="coerce")
                     df = df.dropna(subset=["日期"])
                     df = df.sort_values("日期").reset_index(drop=True)
+
+                    # ── 补充当天实时行情（交易日 pro_bar 不含当天数据）──
+                    if is_trading_day():
+                        try:
+                            df_rt = ts.get_realtime_quotes(stock_code)
+                            if df_rt is not None and not df_rt.empty:
+                                rt = df_rt.iloc[0]
+                                today_str = datetime.now().strftime("%Y%m%d")
+                                # 从上一个交易日 pre_close 计算昨收
+                                rt_date  = pd.to_datetime(today_str, format="%Y%m%d")
+                                rt_open  = float(rt.get('open', 0) or 0)
+                                rt_high  = float(rt.get('high', 0) or 0)
+                                rt_low   = float(rt.get('low', 0) or 0)
+                                rt_close = float(rt.get('price', 0) or 0)
+                                rt_vol   = float(str(rt.get('volume', 0) or '0').replace(',', ''))
+                                # 只在有效数据且比最新历史数据更新时追加
+                                latest_hist_date = df["日期"].max()
+                                if rt_close > 0 and rt_date > latest_hist_date:
+                                    today_row = {
+                                        "日期": rt_date,
+                                        "开盘": rt_open, "最高": rt_high,
+                                        "最低": rt_low,  "收盘": rt_close,
+                                        "成交量": rt_vol
+                                    }
+                                    df = pd.concat(
+                                        [df, pd.DataFrame([today_row])],
+                                        ignore_index=True
+                                    )
+                                    log_info(f"✅ 实时行情补充成功：{stock_code} 当前价 {rt_close}")
+                                elif rt_close > 0 and rt_date == latest_hist_date:
+                                    # 今天的 pro_bar 已有数据，用实时价更新最后一行收盘价
+                                    df.loc[df.index[-1], "收盘"] = rt_close
+                                    if rt_high > 0:
+                                        df.loc[df.index[-1], "最高"] = max(df.iloc[-1]["最高"], rt_high)
+                                    if rt_low > 0:
+                                        df.loc[df.index[-1], "最低"] = min(df.iloc[-1]["最低"], rt_low)
+                                    log_info(f"✅ 实时价更新最后一行：{rt_close}")
+                        except Exception as e:
+                            log_info(f"⚠️ 实时行情补充失败（不影响分析）：{e}")
                     try:
                         basic = pro.stock_basic(ts_code=ts_code, fields='ts_code,name,industry')
                         stock_name     = basic.iloc[0]['name']
