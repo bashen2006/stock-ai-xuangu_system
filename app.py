@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.5</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.6</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.6** 历史复盘三处 bug 修复：① advice 关键词匹配修复（从未知→正确提取买入/卖出/观望）② save_record 加股票名称和系统信号字段 ③ check_performance 加实时行情补充确保当天价格正确<br>
 **V9.5** 补充实时行情：pro_bar日K不含当天数据，用 ts.get_realtime_quotes() 补充今日实时价；交易日分析时价格始终是最新当天数据<br>
 **V9.4** 缓存策略修正：工作日始终跳缓存（含午休和收盘后），确保每次都显示今日最新收盘价；周末/假日才用缓存；状态提示显示周几+时间<br>
 **V9.3** 修复交易时间判断：强制使用北京时间（UTC+8），修复境外服务器时区偏差导致的误判；状态提示显示北京时间供核对<br>
@@ -300,17 +301,23 @@ with st.sidebar:
         st.caption(f"暂无日志，路径：{_LOG_FILE}")
 
 # ===== 保存记录 =====
-def save_record(stock_code, price, short_trend, mid_trend, score, advice):
+def save_record(stock_code, stock_name, price, short_trend, mid_trend, score, signal, advice):
+    """
+    signal: 系统交易信号（买入/卖出/观望）
+    advice: GPT 建议关键词
+    """
     file = _RECORDS_FILE
 
     data = {
-        "时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "股票": stock_code,
-        "价格": price,
+        "时间":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "代码":     stock_code,
+        "股票":     stock_name,
+        "价格":     price,
         "短线趋势": short_trend,
         "波段趋势": mid_trend,
-        "总评分": score,
-        "建议": advice
+        "总评分":   score,
+        "系统信号": signal,
+        "建议":     advice,
     }
 
     df_new = pd.DataFrame([data])
@@ -1853,26 +1860,47 @@ def check_performance():
         if pro is not None:
             try:
                 ts_code = stock + ".SH" if stock.startswith("6") else stock + ".SZ"
-                df_new = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=100)
-                time.sleep(0.5)  # 限流保护
+
+                # 先尝试实时行情（交易日优先）
+                current_price = None
+                try:
+                    import tushare as ts2
+                    df_rt = ts2.get_realtime_quotes(stock)
+                    if df_rt is not None and not df_rt.empty:
+                        rt_price = float(df_rt.iloc[0].get('price', 0) or 0)
+                        if rt_price > 0:
+                            current_price = rt_price
+                except:
+                    pass
+
+                # 实时失败则用 pro_bar 最新收盘
+                df_new = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=5)
+                time.sleep(0.5)
 
                 if df_new is not None and not df_new.empty:
                     df_new = df_new.sort_values("trade_date")
-                    current_price = df_new.iloc[-1]['close']
+                    bar_price = df_new.iloc[-1]['close']
+                    if current_price is None:
+                        current_price = bar_price
+                    # 用于计算最大回撤
                     min_price = df_new['low'].min()
                     drawdown = round((min_price - old_price) / old_price * 100, 2)
-                    profit = round((current_price - old_price) / old_price * 100, 2)
+                else:
+                    min_price = None
+                    drawdown = None
 
-                    if profit > 0:
+                if current_price:
+                    profit = round((current_price - old_price) / old_price * 100, 2)
+                    if profit > 5:
                         result = "✅ 盈利"
-                    elif drawdown < -5:
+                    elif drawdown is not None and drawdown < -5:
                         result = "❌ 止损失败"
                     else:
                         result = "⚠️ 观察中"
 
                     if "❌" in result:
                         try:
-                            prompt = f"""股票{stock}，买入价{old_price}，现价{current_price}，跌幅{drawdown}%。请简要分析错误原因并给出改进建议（100字以内）。"""
+                            prompt = f"股票{stock}，买入价{old_price}，现价{current_price}，跌幅{drawdown}%。请简要分析错误原因并给出改进建议（100字以内）。"
                             response = client.chat.completions.create(
                                 model="gpt-4o-mini",
                                 messages=[{"role": "user", "content": prompt}]
@@ -1880,6 +1908,7 @@ def check_performance():
                             summary = response.choices[0].message.content
                         except:
                             summary = "AI分析失败"
+
             except Exception as e:
                 log_info(f"⚠️ 复盘：获取 {stock} 最新价格失败（{e}）")
 
@@ -1889,16 +1918,18 @@ def check_performance():
             days = "-"
 
         results.append({
-            "股票": stock,
+            "代码":     stock,
+            "股票名称": row.get("股票", stock) if "股票名称" not in row else row.get("股票名称", stock),
             "记录时间": record_time,
             "持有天数": days,
-            "买入价": old_price,
-            "当前价": current_price if current_price else "—",
-            "收益%": profit if profit is not None else "—",
-            "最大回撤%": drawdown if drawdown is not None else "—",
-            "建议": advice,
-            "结果": result,
-            "AI总结": summary
+            "买入价":   old_price,
+            "当前价":   current_price if current_price else "—",
+            "收益%":    profit if profit is not None else "—",
+            "最大回撤%":drawdown if drawdown is not None else "—",
+            "系统信号": row.get("系统信号", "—"),
+            "建议":     advice,
+            "结果":     result,
+            "AI总结":   summary,
         })
 
     progress.empty()  # 清除进度条
@@ -2211,16 +2242,16 @@ with tab_analyze:
                 result = response.choices[0].message.content
 
                 # ===== 提取建议 =====
-                advice = "未知"
-
-                if "强烈看多" in result:
-                    advice = "强烈看多"
-                elif "轻仓" in result:
-                    advice = "轻仓"
-                elif "观望" in result:
+                advice = "观望"
+                result_lower = result
+                if any(k in result_lower for k in ["强烈买入", "强烈看多", "重仓买入"]):
+                    advice = "强烈买入"
+                elif any(k in result_lower for k in ["买入", "增持", "轻仓"]):
+                    advice = "买入"
+                elif any(k in result_lower for k in ["卖出", "减持", "止盈", "止损"]):
+                    advice = "卖出"
+                elif any(k in result_lower for k in ["观望", "等待", "不建议", "回避"]):
                     advice = "观望"
-                elif "不建议" in result:
-                    advice = "不建议"
 
                 # ===== 热点识别：优先用真实涨停板数据 =====
                 import re as _re
@@ -2744,7 +2775,7 @@ with tab_analyze:
                 render_ai_report(result, hot_flag)
 
                 # ===== 保存记录 =====
-                save_record(stock_code, price, short_trend, mid_trend, final_score, advice)
+                save_record(stock_code, stock_name, price, short_trend, mid_trend, final_score, final_signal, advice)
 
         except Exception as e:
             st.error(f"❌ 出错：{e}")
