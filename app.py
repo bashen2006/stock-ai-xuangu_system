@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.7</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.8</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.8** 修复主力控盘误判：拉升与出货互斥不再叠加；RSI高位在拉升阶段不惩罚；加入均线多头/5日涨幅/量价配合维度；洗盘出货函数修正：上涨日直接返回中性，回调判断逻辑对齐实际市场行为<br>
 **V9.7** 复盘深度修复：兼容新旧记录格式；CSV前导零补回（2938→002938）；股票代码和名称字段分离读取；实时+日K双重价格获取；所有字段正确显示<br>
 **V9.6** 历史复盘三处 bug 修复：① advice 关键词匹配修复（从未知→正确提取买入/卖出/观望）② save_record 加股票名称和系统信号字段 ③ check_performance 加实时行情补充确保当天价格正确<br>
 **V9.5** 补充实时行情：pro_bar日K不含当天数据，用 ts.get_realtime_quotes() 补充今日实时价；交易日分析时价格始终是最新当天数据<br>
@@ -1355,7 +1356,7 @@ def calc_chip_stability(df):
 def detect_washout_vs_distribution(df):
     """
     判断当前回调是"洗盘（健康）"还是"出货（危险）"
-    返回：decision('洗盘'|'出货'|'中性'), confidence(0-100), tags(证据列表)
+    注：只有在价格出现回调时才有意义；价格上涨中应返回中性
     """
     if len(df) < 30:
         return "中性", 0, ["样本不足"]
@@ -1377,66 +1378,62 @@ def detect_washout_vs_distribution(df):
 
     high_20 = df['最高'].tail(20).max()
 
+    # 今日是上涨日：价格未回调，直接返回中性
+    today_chg = (price - prev['收盘']) / prev['收盘'] if prev['收盘'] > 0 else 0
+    if today_chg >= 0:
+        return "中性", 0, ["上涨日，无回调信号"]
+
     score = 0
     tags  = []
 
     # ===== 洗盘特征（加分）=====
-
-    # 未破位（MA10或MA20仍在价格下方）
     if price > ma10 or price > ma20:
         score += 20
         tags.append("未破位")
 
-    # 回调缩量
     if vol < vol_ma5:
         score += 15
         tags.append("缩量回调")
 
-    # 下影线承接（用 min(开盘,收盘) 正确计算）
     lower_shadow = (min(open_p, price) - low) / price if price > 0 else 0
     if lower_shadow > 0.02:
         score += 10
         tags.append("下影承接")
 
-    # 跌幅可控（当日跌幅在0-4%之间）
-    drop_pct = (prev['收盘'] - price) / prev['收盘'] if prev['收盘'] > 0 else 0
-    if 0 < drop_pct < 0.04:
-        score += 10
+    drop_pct = abs(today_chg)
+    if drop_pct < 0.03:
+        score += 15
         tags.append("跌幅可控")
+    elif drop_pct < 0.05:
+        score += 8
 
     # ===== 出货特征（减分）=====
-
-    # 高位滞涨放量（收盘跌幅>1%才算）
     drop_r = (open_p - price) / open_p if open_p > 0 else 0
-    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and drop_r > 0.01:
+    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and drop_r > 0.02:
         score -= 35
         tags.append("高位放量滞涨")
 
-    # 上影线抛压（用 max(开盘,收盘) 正确计算）
     upper_shadow = (high - max(open_p, price)) / price if price > 0 else 0
     if upper_shadow > 0.03:
         score -= 15
         tags.append("上影抛压")
 
-    # 跌破MA20支撑
     if price < ma20:
         score -= 25
         tags.append("跌破支撑")
 
-    # 放量下跌
-    if vol > vol_ma10 * 1.3 and price < prev['收盘']:
+    if vol > vol_ma10 * 1.3:
         score -= 20
         tags.append("放量下跌")
 
-    # RSI高位风险
-    if rsi > 75:
+    # RSI高位：只有在明显下跌时才警告
+    if rsi > 80 and drop_pct > 0.03:
         score -= 10
         tags.append("高位风险")
 
-    # ===== 结论 =====
-    if score >= 30:
+    if score >= 25:
         decision = "洗盘"
-    elif score <= -30:
+    elif score <= -25:
         decision = "出货"
     else:
         decision = "中性"
@@ -1449,59 +1446,92 @@ def detect_washout_vs_distribution(df):
 def detect_main_control(df):
     """
     识别主力控盘阶段和行为特征
+    核心改动：拉升和出货互斥；RSI高位在拉升阶段不惩罚；加入资金持续性判断
     返回：phase(阶段), score(强度0-100), tags(行为标签)
     仅用于展示，不纳入评分链
     """
-    latest = df.iloc[-1]
+    if len(df) < 20:
+        return "数据不足", 0, []
 
-    price  = latest['收盘']
-    open_p = latest['开盘']
-    high   = latest['最高']
-    low    = latest['最低']
-    vol    = latest['成交量']
-
+    latest  = df.iloc[-1]
+    price   = latest['收盘']
+    open_p  = latest['开盘']
+    high    = latest['最高']
+    low     = latest['最低']
+    vol     = latest['成交量']
+    rsi     = latest['RSI']
+    ma5     = latest['MA5']
+    ma10    = latest['MA10']
+    ma20    = latest['MA20']
     vol_ma5 = latest['VOL_MA5']
     vol_ma10= latest['VOL_MA10']
-    rsi     = latest['RSI']
 
     low_20  = df['最低'].tail(20).min()
     high_20 = df['最高'].tail(20).max()
+    price_5d_ago = df['收盘'].iloc[-6] if len(df) >= 6 else price
 
     score = 0
     tags  = []
 
-    # 吸筹：低位缩量
-    if price <= low_20 * 1.08 and vol < vol_ma5 * 0.8:
-        score += 25
+    # ── 1. 吸筹：低位缩量（建仓期）──────────────────────
+    if price <= low_20 * 1.10 and vol < vol_ma5 * 0.85:
+        score += 20
         tags.append("吸筹")
 
-    # 锁仓：振幅收敛
+    # ── 2. 锁仓：近10日振幅收敛（筹码集中）─────────────
     amp_ratio = (df['最高'] - df['最低']).tail(10).mean() / price if price > 0 else 1
     if amp_ratio < 0.03:
-        score += 20
+        score += 25
         tags.append("锁仓")
+    elif amp_ratio < 0.05:
+        score += 10
+        tags.append("筹码趋稳")
 
-    # 洗盘：下影线 + 未跌破低位
-    lower_shadow = (min(open_p, price) - low) / price if price > 0 else 0
-    if lower_shadow > 0.03 and price > low_20 * 1.05:
+    # ── 3. 均线多头排列（趋势结构）──────────────────────
+    if ma5 > ma10 > ma20:
         score += 15
-        tags.append("洗盘")
+        tags.append("多头排列")
+    elif ma5 > ma10:
+        score += 8
 
-    # 拉升：放量接近或突破前高
-    if price >= high_20 * 0.97 and vol > vol_ma10 * 1.2:
-        score += 30
+    # ── 4. 近5日持续上涨（主力推升）────────────────────
+    if price_5d_ago > 0:
+        gain_5d = (price - price_5d_ago) / price_5d_ago
+        if gain_5d >= 0.05:
+            score += 15
+            tags.append(f"5日涨{gain_5d*100:.1f}%")
+        elif gain_5d >= 0.02:
+            score += 8
+
+    # ── 5. 量能配合：放量上涨（主力资金介入）───────────
+    is_up_day = price >= open_p  # 今日收涨或平
+    if vol > vol_ma10 * 1.2 and is_up_day:
+        score += 20
+        tags.append("放量上涨")
+    elif vol > vol_ma5 and is_up_day:
+        score += 10
+        tags.append("量能配合")
+
+    # ── 6. 接近或突破前高（拉升阶段）────────────────────
+    if price >= high_20 * 0.97:
+        score += 15
         tags.append("拉升")
 
-    # 出货：高位放量且明显收阴（跌幅>1%才算，小阴线不算）
+    # ── 7. 出货信号（与拉升互斥）────────────────────────
+    # 只有明确不在拉升阶段时才判断出货
     drop_ratio = (open_p - price) / open_p if open_p > 0 else 0
-    if price >= high_20 * 0.95 and vol > vol_ma5 * 1.5 and drop_ratio > 0.01:
-        score -= 35
+    is_pullback = price < high_20 * 0.90  # 已脱离高位
+    if is_pullback and vol > vol_ma5 * 1.5 and drop_ratio > 0.01:
+        score -= 30
         tags.append("出货")
 
-    # 超买修正
-    if rsi > 80:
+    # ── 8. RSI 处理：拉升期高 RSI 不惩罚 ────────────────
+    in_rally = "拉升" in tags or "放量上涨" in tags
+    if rsi > 85 and not in_rally:
         score -= 10
         tags.append("超买风险")
+    elif rsi > 80 and not in_rally:
+        score -= 5
 
     score = max(0, min(100, score))
 
