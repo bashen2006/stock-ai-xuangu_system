@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.9</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V10.0</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V10.0** 复盘彻底修复：读取CSV强制dtype=str，nan/float/旧格式三种情况全部处理，代码补零逻辑统一；主力控盘加连续上涨天数维度（对齐同花顺判断逻辑）<br>
 **V9.9** GPT temperature=0（结果不再随机）；复盘00开头股票名称查缓存修复；交易信号加参数说明（RSI超买≠立即下跌，矛盾时显示解释）；洗盘出货上涨日返回中性<br>
 **V9.8** 修复主力控盘误判：拉升与出货互斥不再叠加；RSI高位在拉升阶段不惩罚；加入均线多头/5日涨幅/量价配合维度；洗盘出货函数修正：上涨日直接返回中性，回调判断逻辑对齐实际市场行为<br>
 **V9.7** 复盘深度修复：兼容新旧记录格式；CSV前导零补回（2938→002938）；股票代码和名称字段分离读取；实时+日K双重价格获取；所有字段正确显示<br>
@@ -305,34 +306,25 @@ with st.sidebar:
 
 # ===== 保存记录 =====
 def save_record(stock_code, stock_name, price, short_trend, mid_trend, score, signal, advice):
-    """
-    signal: 系统交易信号（买入/卖出/观望）
-    advice: GPT 建议关键词
-    """
     file = _RECORDS_FILE
-
     data = {
         "时间":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "代码":     stock_code,
-        "股票":     stock_name,
-        "价格":     price,
-        "短线趋势": short_trend,
-        "波段趋势": mid_trend,
-        "总评分":   score,
-        "系统信号": signal,
-        "建议":     advice,
+        "代码":     str(stock_code).zfill(6),          # 强制字符串+补零
+        "股票":     str(stock_name) if stock_name else str(stock_code).zfill(6),
+        "价格":     round(float(price), 3),
+        "短线趋势": str(short_trend),
+        "波段趋势": str(mid_trend),
+        "总评分":   int(score),
+        "系统信号": str(signal),
+        "建议":     str(advice),
     }
-
     df_new = pd.DataFrame([data])
-
     if os.path.exists(file):
-        df_old = pd.read_csv(file)
+        df_old = pd.read_csv(file, dtype={"代码": str})  # 强制代码列读为字符串
         df_all = pd.concat([df_old, df_new], ignore_index=True)
     else:
         df_all = df_new
-
     df_all.to_csv(file, index=False)
-    # 同步到 GitHub，确保重新部署后数据不丢失
     push_records_to_github()
 
 # ===== 缓存函数 =====
@@ -1505,7 +1497,7 @@ def detect_main_control(df):
             score += 8
 
     # ── 5. 量能配合：放量上涨（主力资金介入）───────────
-    is_up_day = price >= open_p  # 今日收涨或平
+    is_up_day = price >= open_p
     if vol > vol_ma10 * 1.2 and is_up_day:
         score += 20
         tags.append("放量上涨")
@@ -1517,6 +1509,21 @@ def detect_main_control(df):
     if price >= high_20 * 0.97:
         score += 15
         tags.append("拉升")
+
+    # ── 7. 连续上涨天数（同花顺核心指标之一）────────────
+    recent = df['收盘'].tail(10).values
+    consec_up = 0
+    for i in range(len(recent)-1, 0, -1):
+        if recent[i] > recent[i-1]:
+            consec_up += 1
+        else:
+            break
+    if consec_up >= 5:
+        score += 20
+        tags.append(f"连续上涨{consec_up}天")
+    elif consec_up >= 3:
+        score += 10
+        tags.append(f"连续上涨{consec_up}天")
 
     # ── 7. 出货信号（与拉升互斥）────────────────────────
     # 只有明确不在拉升阶段时才判断出货
@@ -1851,7 +1858,7 @@ def check_performance():
         log_info("⚠️ 复盘：records.csv 不存在，本次会话尚未有分析记录")
         return None
 
-    df = pd.read_csv(_RECORDS_FILE)
+    df = pd.read_csv(_RECORDS_FILE, dtype={"代码": str, "股票": str})
     if df.empty:
         log_info("⚠️ 复盘：records.csv 为空")
         return pd.DataFrame()
@@ -1878,33 +1885,58 @@ def check_performance():
     for idx, (index, row) in enumerate(df.iterrows()):
         progress.progress((idx + 1) / len(df), text=f"正在处理 {idx+1}/{len(df)}...")
 
-        # ── 兼容新旧字段格式 ──────────────────────────────
-        # 旧格式：只有"股票"列（存的是代码）
-        # 新格式：有"代码"列和"股票"列（股票存的是名称）
-        if "代码" in row.index:
-            stock_code = str(row["代码"]).strip()
-            stock_name = str(row.get("股票", stock_code)).strip()
+        # ── 读取代码和名称，兼容新旧格式 + nan + float ──────
+        def clean_code(val):
+            """清理股票代码：去掉 nan、.0，补前导零"""
+            s = str(val).strip()
+            if s.lower() in ('nan', 'none', ''):
+                return None
+            # 处理 float 格式如 2938.0
+            try:
+                s = str(int(float(s)))
+            except:
+                pass
+            return s.zfill(6)
+
+        # 新格式有"代码"列
+        if "代码" in row.index and str(row["代码"]).strip().lower() not in ('nan', 'none', ''):
+            stock_code = clean_code(row["代码"])
+            raw_name   = str(row.get("股票", "")).strip()
+            stock_name = raw_name if raw_name.lower() not in ('nan', 'none', '') else None
         else:
-            stock_code = str(row["股票"]).strip()
-            stock_name = stock_code
+            # 旧格式："股票"列存的是代码
+            stock_code = clean_code(row["股票"])
+            stock_name = None
 
-        # 股票代码补零
-        stock_code = stock_code.zfill(6)
+        if not stock_code:
+            log_info(f"⚠️ 跳过无效记录（行 {idx}）")
+            continue
 
-        # 查股票名称：先查缓存文件，再查实时行情
-        if not stock_name or stock_name == stock_code or stock_name.isdigit():
+        # 尝试从缓存文件补全名称
+        if not stock_name or stock_name == stock_code:
             try:
                 with open(_name_path(stock_code), encoding="utf-8") as f:
                     cached = f.read().strip()
                     if cached:
                         stock_name = cached
             except:
-                stock_name = stock_code
+                pass
+        if not stock_name:
+            stock_name = stock_code
 
-        old_price   = row["价格"]
-        advice      = str(row.get("建议", "—")).strip()
-        record_time = row["时间"]
-        sys_signal  = str(row.get("系统信号", "—")).strip()
+        old_price_raw = row.get("价格", None)
+        try:
+            old_price = float(str(old_price_raw).replace(',', ''))
+        except:
+            log_info(f"⚠️ 跳过无效价格记录（{stock_code}，价格={old_price_raw}）")
+            continue
+
+        advice     = str(row.get("建议", "—")).strip()
+        record_time= str(row.get("时间", "")).strip()
+        sys_signal = str(row.get("系统信号", "—")).strip()
+        # 清理 nan
+        advice     = "—" if advice.lower()     in ('nan','none','') else advice
+        sys_signal = "—" if sys_signal.lower() in ('nan','none','') else sys_signal
 
         current_price = None
         profit        = None
@@ -1963,7 +1995,8 @@ def check_performance():
                             summary = "AI分析失败"
 
             except Exception as e:
-                log_info(f"⚠️ 复盘：获取 {stock_code} 价格失败（{e}）")
+                log_info(f"⚠️ 复盘价格获取失败 {stock_code}：{e}")
+                current_price = None
 
         try:
             days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
