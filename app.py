@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.8</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.9</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.9** GPT temperature=0（结果不再随机）；复盘00开头股票名称查缓存修复；交易信号加参数说明（RSI超买≠立即下跌，矛盾时显示解释）；洗盘出货上涨日返回中性<br>
 **V9.8** 修复主力控盘误判：拉升与出货互斥不再叠加；RSI高位在拉升阶段不惩罚；加入均线多头/5日涨幅/量价配合维度；洗盘出货函数修正：上涨日直接返回中性，回调判断逻辑对齐实际市场行为<br>
 **V9.7** 复盘深度修复：兼容新旧记录格式；CSV前导零补回（2938→002938）；股票代码和名称字段分离读取；实时+日K双重价格获取；所有字段正确显示<br>
 **V9.6** 历史复盘三处 bug 修复：① advice 关键词匹配修复（从未知→正确提取买入/卖出/观望）② save_record 加股票名称和系统信号字段 ③ check_performance 加实时行情补充确保当天价格正确<br>
@@ -1887,8 +1888,18 @@ def check_performance():
             stock_code = str(row["股票"]).strip()
             stock_name = stock_code
 
-        # CSV 读取时前导零会丢失（002938→2938），补回来
+        # 股票代码补零
         stock_code = stock_code.zfill(6)
+
+        # 查股票名称：先查缓存文件，再查实时行情
+        if not stock_name or stock_name == stock_code or stock_name.isdigit():
+            try:
+                with open(_name_path(stock_code), encoding="utf-8") as f:
+                    cached = f.read().strip()
+                    if cached:
+                        stock_name = cached
+            except:
+                stock_name = stock_code
 
         old_price   = row["价格"]
         advice      = str(row.get("建议", "—")).strip()
@@ -1944,7 +1955,8 @@ def check_performance():
                             prompt = f"股票{stock_name}（{stock_code}），买入价{old_price}，现价{current_price}，跌幅{drawdown}%。简要分析错误原因和改进建议（100字以内）。"
                             resp = client.chat.completions.create(
                                 model="gpt-4o-mini",
-                                messages=[{"role": "user", "content": prompt}]
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0
                             )
                             summary = resp.choices[0].message.content
                         except:
@@ -2277,7 +2289,8 @@ with tab_analyze:
 
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}]
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0
                 )
 
                 result = response.choices[0].message.content
@@ -2749,13 +2762,29 @@ with tab_analyze:
                 )
 
                 # ===== 交易信号（高亮）=====
-                signal_color = "#ef4444" if final_signal == "买入" else "#10b981" if final_signal == "卖出" else "#f59e0b"
+                signal_color = "#ef4444" if final_signal == "买入" else "#ef4444" if final_signal == "卖出" else "#f59e0b"
                 buy_tag_str = f"（{buy_tag}）" if buy_tag else ""
                 st.markdown(
                     f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px">🎯 交易信号</div>'
                     f'<div style="font-size:20px;font-weight:700;color:{signal_color};margin-bottom:8px">{final_signal}{buy_tag_str}</div>',
                     unsafe_allow_html=True
                 )
+
+                # 信号参数说明
+                rsi_val = round(latest['RSI'], 1)
+                if final_signal == "卖出" and (short_trend == "上升" or mid_trend == "上升"):
+                    st.warning(
+                        f"⚠️ **信号说明（存在矛盾，需结合判断）**\n\n"
+                        f"**触发卖出原因**：RSI={rsi_val}，已进入超买区（>80），短线统计上回调概率较高。\n\n"
+                        f"**与趋势的矛盾**：短线趋势{short_trend}、波段趋势{mid_trend}，趋势本身仍向上。\n\n"
+                        f"**如何理解**：RSI超买 ≠ 立即下跌。强势股可以在超买区继续上涨。系统给出卖出是**短线风控提示**，"
+                        f"意思是「当前追高风险较大，已持仓的注意止盈，未持仓的等回调再介入」，"
+                        f"**不是说股票要跌**。结合主力控盘状态综合判断。"
+                    )
+                elif final_signal == "买入":
+                    st.info(f"💡 综合评分、趋势、资金面共同支持买入，建议在买点附近分批介入，设置止损。")
+                else:
+                    st.info(f"💡 当前信号不够强烈，建议观望等待更明确机会。RSI={rsi_val}。")
                 price_items = []
                 if buy_price:
                     price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">建议买点</div><div style="font-size:15px;font-weight:700;color:#ef4444">{buy_price}</div></div>')
