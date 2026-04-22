@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.6</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V9.7</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V9.7** 复盘深度修复：兼容新旧记录格式；CSV前导零补回（2938→002938）；股票代码和名称字段分离读取；实时+日K双重价格获取；所有字段正确显示<br>
 **V9.6** 历史复盘三处 bug 修复：① advice 关键词匹配修复（从未知→正确提取买入/卖出/观望）② save_record 加股票名称和系统信号字段 ③ check_performance 加实时行情补充确保当天价格正确<br>
 **V9.5** 补充实时行情：pro_bar日K不含当天数据，用 ts.get_realtime_quotes() 补充今日实时价；交易日分析时价格始终是最新当天数据<br>
 **V9.4** 缓存策略修正：工作日始终跳缓存（含午休和收盘后），确保每次都显示今日最新收盘价；周末/假日才用缓存；状态提示显示周几+时间<br>
@@ -1845,52 +1846,62 @@ def check_performance():
 
     for idx, (index, row) in enumerate(df.iterrows()):
         progress.progress((idx + 1) / len(df), text=f"正在处理 {idx+1}/{len(df)}...")
-        stock = str(row["股票"]).strip()
-        old_price = row["价格"]
-        advice = row.get("建议", "未知")
+
+        # ── 兼容新旧字段格式 ──────────────────────────────
+        # 旧格式：只有"股票"列（存的是代码）
+        # 新格式：有"代码"列和"股票"列（股票存的是名称）
+        if "代码" in row.index:
+            stock_code = str(row["代码"]).strip()
+            stock_name = str(row.get("股票", stock_code)).strip()
+        else:
+            stock_code = str(row["股票"]).strip()
+            stock_name = stock_code
+
+        # CSV 读取时前导零会丢失（002938→2938），补回来
+        stock_code = stock_code.zfill(6)
+
+        old_price   = row["价格"]
+        advice      = str(row.get("建议", "—")).strip()
         record_time = row["时间"]
+        sys_signal  = str(row.get("系统信号", "—")).strip()
 
         current_price = None
-        profit = None
-        drawdown = None
-        result = "⚠️ 观察中"
-        summary = "暂无"
+        profit        = None
+        drawdown      = None
+        result        = "⚠️ 观察中"
+        summary       = "暂无"
 
-        # 尝试获取最新价格
+        # ── 获取最新价格 ──────────────────────────────────
         if pro is not None:
             try:
-                ts_code = stock + ".SH" if stock.startswith("6") else stock + ".SZ"
+                ts_code = stock_code + ".SH" if stock_code.startswith("6") else stock_code + ".SZ"
 
-                # 先尝试实时行情（交易日优先）
-                current_price = None
+                # 优先实时行情
                 try:
-                    import tushare as ts2
-                    df_rt = ts2.get_realtime_quotes(stock)
+                    import tushare as _ts_rt
+                    df_rt = _ts_rt.get_realtime_quotes(stock_code)
                     if df_rt is not None and not df_rt.empty:
                         rt_price = float(df_rt.iloc[0].get('price', 0) or 0)
                         if rt_price > 0:
                             current_price = rt_price
+                            if not stock_name or stock_name == stock_code:
+                                stock_name = str(df_rt.iloc[0].get('name', stock_code))
                 except:
                     pass
 
-                # 实时失败则用 pro_bar 最新收盘
-                df_new = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=5)
+                # 降级用 pro_bar（取最近5条即可，不需要100条）
+                df_bar = ts.pro_bar(ts_code=ts_code, adj='qfq', limit=5)
                 time.sleep(0.5)
-
-                if df_new is not None and not df_new.empty:
-                    df_new = df_new.sort_values("trade_date")
-                    bar_price = df_new.iloc[-1]['close']
+                if df_bar is not None and not df_bar.empty:
+                    df_bar = df_bar.sort_values("trade_date")
                     if current_price is None:
-                        current_price = bar_price
-                    # 用于计算最大回撤
-                    min_price = df_new['low'].min()
-                    drawdown = round((min_price - old_price) / old_price * 100, 2)
-                else:
-                    min_price = None
-                    drawdown = None
+                        current_price = float(df_bar.iloc[-1]['close'])
+                    low_prices = df_bar['low'].tolist()
+                    min_price  = min(low_prices)
+                    drawdown   = round((min_price - float(old_price)) / float(old_price) * 100, 2)
 
-                if current_price:
-                    profit = round((current_price - old_price) / old_price * 100, 2)
+                if current_price is not None:
+                    profit = round((float(current_price) - float(old_price)) / float(old_price) * 100, 2)
                     if profit > 5:
                         result = "✅ 盈利"
                     elif drawdown is not None and drawdown < -5:
@@ -1900,17 +1911,17 @@ def check_performance():
 
                     if "❌" in result:
                         try:
-                            prompt = f"股票{stock}，买入价{old_price}，现价{current_price}，跌幅{drawdown}%。请简要分析错误原因并给出改进建议（100字以内）。"
-                            response = client.chat.completions.create(
+                            prompt = f"股票{stock_name}（{stock_code}），买入价{old_price}，现价{current_price}，跌幅{drawdown}%。简要分析错误原因和改进建议（100字以内）。"
+                            resp = client.chat.completions.create(
                                 model="gpt-4o-mini",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            summary = response.choices[0].message.content
+                            summary = resp.choices[0].message.content
                         except:
                             summary = "AI分析失败"
 
             except Exception as e:
-                log_info(f"⚠️ 复盘：获取 {stock} 最新价格失败（{e}）")
+                log_info(f"⚠️ 复盘：获取 {stock_code} 价格失败（{e}）")
 
         try:
             days = (datetime.now() - datetime.strptime(record_time, "%Y-%m-%d %H:%M:%S")).days
@@ -1918,15 +1929,15 @@ def check_performance():
             days = "-"
 
         results.append({
-            "代码":     stock,
-            "股票名称": row.get("股票", stock) if "股票名称" not in row else row.get("股票名称", stock),
+            "代码":     stock_code,
+            "股票名称": stock_name,
             "记录时间": record_time,
             "持有天数": days,
             "买入价":   old_price,
-            "当前价":   current_price if current_price else "—",
+            "当前价":   round(current_price, 2) if current_price else "—",
             "收益%":    profit if profit is not None else "—",
             "最大回撤%":drawdown if drawdown is not None else "—",
-            "系统信号": row.get("系统信号", "—"),
+            "系统信号": sys_signal,
             "建议":     advice,
             "结果":     result,
             "AI总结":   summary,
