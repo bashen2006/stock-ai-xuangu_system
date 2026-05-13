@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V10.0</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V10.1</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V10.1** 系统性重构：四象限市场状态（BULL/BEAR/WIDE_CHOP/NARROW_CHOP）+ADX趋势强度；OBV资金方向；VWAP量加权均价；ATR动态止损；大盘（上证指数）共振判断；RSI阈值随市场状态自适应；统一信号出口消除矛盾<br>
 **V10.0** 复盘彻底修复：读取CSV强制dtype=str，nan/float/旧格式三种情况全部处理，代码补零逻辑统一；主力控盘加连续上涨天数维度（对齐同花顺判断逻辑）<br>
 **V9.9** GPT temperature=0（结果不再随机）；复盘00开头股票名称查缓存修复；交易信号加参数说明（RSI超买≠立即下跌，矛盾时显示解释）；洗盘出货上涨日返回中性<br>
 **V9.8** 修复主力控盘误判：拉升与出货互斥不再叠加；RSI高位在拉升阶段不惩罚；加入均线多头/5日涨幅/量价配合维度；洗盘出货函数修正：上涨日直接返回中性，回调判断逻辑对齐实际市场行为<br>
@@ -544,42 +545,76 @@ def get_stock_data(stock_code, use_cache_always=False):
 
 # ===== 技术指标 =====
 def calculate_indicators(df):
-    df['MA5'] = df['收盘'].rolling(5).mean()
+    # ── 均线 ──────────────────────────────────────────────
+    df['MA5']  = df['收盘'].rolling(5).mean()
     df['MA10'] = df['收盘'].rolling(10).mean()
     df['MA20'] = df['收盘'].rolling(20).mean()
     df['MA60'] = df['收盘'].rolling(60).mean()
 
-    df['EMA12'] = df['收盘'].ewm(span=12).mean()
-    df['EMA26'] = df['收盘'].ewm(span=26).mean()
-    df['MACD'] = df['EMA12'] - df['EMA26']
+    # ── MACD ─────────────────────────────────────────────
+    df['EMA12']  = df['收盘'].ewm(span=12).mean()
+    df['EMA26']  = df['收盘'].ewm(span=26).mean()
+    df['MACD']   = df['EMA12'] - df['EMA26']
     df['SIGNAL'] = df['MACD'].ewm(span=9).mean()
 
-    delta = df['收盘'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
+    # ── RSI ──────────────────────────────────────────────
+    delta    = df['收盘'].diff()
+    gain     = delta.clip(lower=0)
+    loss     = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+    rs       = avg_gain / (avg_loss + 1e-9)
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # ===== KDJ =====
-    low_min = df['最低'].rolling(9).min()
+    # ── KDJ ──────────────────────────────────────────────
+    low_min  = df['最低'].rolling(9).min()
     high_max = df['最高'].rolling(9).max()
+    df['RSV'] = (df['收盘'] - low_min) / (high_max - low_min + 1e-9) * 100
+    df['K']   = df['RSV'].ewm(com=2).mean()
+    df['D']   = df['K'].ewm(com=2).mean()
+    df['J']   = 3 * df['K'] - 2 * df['D']
 
-    df['RSV'] = (df['收盘'] - low_min) / (high_max - low_min) * 100
-    df['K'] = df['RSV'].ewm(com=2).mean()
-    df['D'] = df['K'].ewm(com=2).mean()
-    df['J'] = 3 * df['K'] - 2 * df['D']
-
-    # ===== 布林带 BOLL =====
-    df['MB'] = df['收盘'].rolling(20).mean()
-    df['STD'] = df['收盘'].rolling(20).std()
-
+    # ── 布林带 + BBW（带宽百分比）─────────────────────────
+    df['MB']    = df['收盘'].rolling(20).mean()
+    df['STD']   = df['收盘'].rolling(20).std()
     df['UPPER'] = df['MB'] + 2 * df['STD']
     df['LOWER'] = df['MB'] - 2 * df['STD']
+    df['BBW']   = (df['UPPER'] - df['LOWER']) / (df['MB'] + 1e-9) * 100  # 带宽率
 
-    # ===== 成交量均线 =====
-    df['VOL_MA5'] = df['成交量'].rolling(5).mean()
+    # ── ATR（真实波幅，止损基准）─────────────────────────
+    high_low   = df['最高'] - df['最低']
+    high_close = (df['最高'] - df['收盘'].shift()).abs()
+    low_close  = (df['最低'] - df['收盘'].shift()).abs()
+    import numpy as np
+    tr         = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['ATR']  = tr.rolling(14).mean()
+
+    # ── ADX（趋势强度）───────────────────────────────────
+    plus_dm  = df['最高'].diff().clip(lower=0)
+    minus_dm = (-df['最低'].diff()).clip(lower=0)
+    # 当日涨幅>跌幅时才算+DM，反之才算-DM
+    plus_dm  = plus_dm.where(plus_dm > minus_dm, 0)
+    minus_dm = minus_dm.where(minus_dm > plus_dm, 0)
+    atr14    = df['ATR']
+    plus_di  = 100 * plus_dm.ewm(alpha=1/14, adjust=False).mean()  / (atr14 + 1e-9)
+    minus_di = 100 * minus_dm.ewm(alpha=1/14, adjust=False).mean() / (atr14 + 1e-9)
+    dx       = (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9) * 100
+    df['ADX']      = dx.ewm(alpha=1/14, adjust=False).mean()
+    df['PLUS_DI']  = plus_di
+    df['MINUS_DI'] = minus_di
+
+    # ── OBV（能量潮，资金方向）───────────────────────────
+    import numpy as np
+    obv = (np.sign(df['收盘'].diff()) * df['成交量']).fillna(0).cumsum()
+    df['OBV']    = obv
+    df['OBV_MA'] = obv.rolling(10).mean()
+
+    # ── VWAP（量加权均价，机构成本参考）─────────────────
+    typical  = (df['最高'] + df['最低'] + df['收盘']) / 3
+    df['VWAP'] = (typical * df['成交量']).rolling(20).sum() / (df['成交量'].rolling(20).sum() + 1e-9)
+
+    # ── 成交量均线 ────────────────────────────────────────
+    df['VOL_MA5']  = df['成交量'].rolling(5).mean()
     df['VOL_MA10'] = df['成交量'].rolling(10).mean()
 
     return df
@@ -727,6 +762,78 @@ def auto_select_stocks(stock_list, mode_type):
     return df_result.sort_values(by="总评分", ascending=False)
 
 # ===== 趋势 =====
+# ===== 四象限市场状态分类（借鉴量化实盘系统）=====
+REGIME_ZH = {
+    'BULL':         '📈 单边牛市',
+    'BEAR':         '📉 单边熊市',
+    'WIDE_CHOP':    '↕️ 宽幅震荡',
+    'NARROW_CHOP':  '➡️ 横盘整理',
+}
+
+# 不同市场状态下的 RSI 阈值（牛市容忍更高RSI，熊市更保守）
+RSI_OVERBOUGHT = {'BULL': 88, 'WIDE_CHOP': 78, 'BEAR': 65, 'NARROW_CHOP': 72}
+RSI_OVERSOLD   = {'BULL': 45, 'WIDE_CHOP': 35, 'BEAR': 28, 'NARROW_CHOP': 38}
+
+def classify_regime(df):
+    """
+    四象限市场状态分类
+    ADX > 25 = 有趋势 → 看 EMA60 方向 → BULL / BEAR
+    ADX ≤ 25 = 无趋势 → 看 BBW 带宽  → WIDE_CHOP / NARROW_CHOP
+    """
+    if len(df) < 60:
+        return 'NARROW_CHOP', 0
+    latest = df.iloc[-1]
+    adx    = latest.get('ADX', 0) or 0
+    price  = latest['收盘']
+    ma60   = latest.get('MA60') or latest.get('MA20', price)
+    bbw    = latest.get('BBW', 0) or 0
+
+    if adx > 25:
+        regime = 'BULL' if price > ma60 else 'BEAR'
+    else:
+        regime = 'WIDE_CHOP' if bbw > 4.0 else 'NARROW_CHOP'
+
+    return regime, round(adx, 1)
+
+
+def get_index_resonance():
+    """
+    获取上证指数（000001.SH）判断大盘共振状态
+    价格 > MA60 = 大盘多头，个股信号更可靠
+    """
+    try:
+        import tushare as ts
+        token = st.secrets.get("TUSHARE_TOKEN")
+        if not token:
+            return None, "未配置"
+        ts.set_token(token)
+        pro = ts.pro_api()
+        df_idx = ts.pro_bar(ts_code="000001.SH", adj=None, limit=80)
+        if df_idx is None or df_idx.empty:
+            return None, "无数据"
+        df_idx = df_idx.sort_values("trade_date").reset_index(drop=True)
+        df_idx['MA60'] = df_idx['close'].rolling(60).mean()
+        latest = df_idx.iloc[-1]
+        price  = latest['close']
+        ma60   = latest['MA60']
+        if pd.isna(ma60):
+            return None, "数据不足"
+        is_bull = price > ma60
+        idx_chg = round((price - df_idx.iloc[-2]['close']) / df_idx.iloc[-2]['close'] * 100, 2)
+        label = f"{'多头✅' if is_bull else '空头❌'}  指数{price:.0f}  {'涨' if idx_chg>0 else '跌'}{abs(idx_chg)}%"
+        return is_bull, label
+    except Exception as e:
+        log_info(f"⚠️ 上证指数获取失败：{e}")
+        return None, "获取失败"
+
+
+def get_regime_rsi_limit(regime):
+    """根据市场状态返回超买/超卖阈值"""
+    ob = RSI_OVERBOUGHT.get(regime, 78)
+    os_ = RSI_OVERSOLD.get(regime, 35)
+    return ob, os_
+
+
 def get_trend(df):
     latest = df.iloc[-1]
 
@@ -1028,113 +1135,147 @@ def explain_money_flow(state, score):
         return "暂无明显资金行为，建议观望。"
 
 # ===== 交易信号模块（V4.1：三类触发买点）=====
-def generate_trade_signal(df, score, money_score):
-
-    latest = df.iloc[-1]
-
-    price = latest['收盘']
-    ma5 = latest['MA5']
-    ma10 = latest['MA10']
-    rsi = latest['RSI']
+def generate_trade_signal(df, score, money_score, regime='WIDE_CHOP', obv_rising=True):
+    """
+    统一交易信号生成——唯一出口，不再有多处互相矛盾的信号。
+    使用 ATR 动态止损，RSI 阈值随市场状态自适应。
+    """
+    latest  = df.iloc[-1]
+    price   = latest['收盘']
+    ma5     = latest['MA5']
+    ma10    = latest['MA10']
+    ma20    = latest['MA20']
+    rsi     = latest['RSI']
+    atr     = latest.get('ATR') or (latest['最高'] - latest['最低'])
+    vwap    = latest.get('VWAP', price)
+    macd    = latest.get('MACD', 0)
+    sig_val = latest.get('SIGNAL', 0)
 
     high_20 = df['最高'].tail(20).max()
-    low_20 = df['最低'].tail(20).min()
+    low_20  = df['最低'].tail(20).min()
+    vol     = latest['成交量']
+    vol_ma5 = latest.get('VOL_MA5', vol)
 
-    vol = latest['成交量']
-    vol_ma5 = df['成交量'].rolling(5).mean().iloc[-1]
+    # 根据市场状态获取 RSI 阈值
+    rsi_ob, rsi_os = get_regime_rsi_limit(regime)
 
-    signal = "观望"
-    buy_price = None
-    stop_loss = None
-    take_profit = None
-    buy_tag = ""
+    signal     = "观望"
+    buy_price  = None
+    stop_loss  = None
+    take_profit= None
+    buy_tag    = ""
+    reason     = ""
 
-    # =============================
-    # 🟢 1️⃣ 突破买点（优先级最高）
-    # =============================
-    if (
-        score >= 70 and
+    # ── 第一步：卖出条件（最高优先级）────────────────────
+    # 卖出：RSI 超买（阈值由市场状态决定）
+    if rsi >= rsi_ob:
+        signal  = "卖出"
+        buy_tag = f"RSI超买（{rsi:.0f}≥{rsi_ob}）"
+        reason  = f"当前 RSI={rsi:.0f}，超过{regime}状态下的超买线{rsi_ob}，短线回调概率上升"
+        return signal, buy_price, stop_loss, take_profit, buy_tag, reason
+
+    # 卖出：MACD 高位死叉（价格在高位时才触发）
+    macd_dead = macd < sig_val and price > ma20
+    if macd_dead and price >= high_20 * 0.90:
+        signal  = "卖出"
+        buy_tag = "MACD死叉高位"
+        reason  = "MACD在高位出现死叉，主力资金开始减速，注意止盈"
+        return signal, buy_price, stop_loss, take_profit, buy_tag, reason
+
+    # ── 第二步：买入条件（按优先级）─────────────────────
+    macd_bull = macd > sig_val  # MACD 金叉/多头
+    vol_ok    = vol > vol_ma5 * 1.1
+
+    # 买点1：突破前高 + 量价配合 + OBV资金流入
+    if (score >= 68 and
         price >= high_20 * 0.97 and
-        vol > vol_ma5 * 1.2 and
-        rsi < 75
-    ):
-        signal = "买入"
-        buy_tag = "突破买点"
-        buy_price = round(high_20 * 1.01, 2)   # 突破确认后买
-        stop_loss = round(ma10, 2)
-        take_profit = round(price * 1.08, 2)
+        vol_ok and
+        obv_rising and
+        macd_bull and
+        rsi < rsi_ob - 5):
+        signal      = "买入"
+        buy_tag     = "突破买点"
+        buy_price   = round(high_20 * 1.005, 2)
+        stop_loss   = round(price - 2.5 * atr, 2)   # ATR动态止损
+        take_profit = round(price + 4.0 * atr, 2)   # 风险报酬比 1:1.6
+        reason      = f"价格突破20日高点{high_20:.2f}，成交量放大，OBV资金流入，MACD多头，建议等价格站稳{buy_price}再介入"
 
-    # =============================
-    # 🟡 2️⃣ 回踩买点（最稳）
-    # =============================
-    elif (
-        score >= 60 and
-        ma5 > ma10 and
-        price <= ma10 * 1.02 and
-        rsi < 65
-    ):
-        signal = "买入"
-        buy_tag = "回踩买点"
-        buy_price = round(price, 2)
-        stop_loss = round(ma10 * 0.97, 2)
-        take_profit = round(price * 1.06, 2)
+    # 买点2：回踩均线 + VWAP 支撑
+    elif (score >= 58 and
+          ma5 > ma10 > ma20 and
+          price <= ma10 * 1.015 and
+          price >= vwap * 0.99 and
+          rsi < rsi_ob - 10):
+        signal      = "买入"
+        buy_tag     = "回踩买点"
+        buy_price   = round(price, 2)
+        stop_loss   = round(price - 2.0 * atr, 2)
+        take_profit = round(price + 3.0 * atr, 2)
+        reason      = f"均线多头排列，价格回踩MA10（{ma10:.2f}）和VWAP（{vwap:.2f}）附近，是低风险介入点"
 
-    # =============================
-    # 🔵 3️⃣ 低吸买点（谨慎）
-    # =============================
-    elif (
-        score >= 55 and
-        price <= low_20 * 1.05 and
-        rsi < 40
-    ):
-        signal = "买入"
-        buy_tag = "低吸买点"
-        buy_price = round(price, 2)
-        stop_loss = round(low_20 * 0.97, 2)
-        take_profit = round(price * 1.05, 2)
+    # 买点3：超跌反弹 + OBV 企稳
+    elif (score >= 52 and
+          price <= low_20 * 1.04 and
+          rsi <= rsi_os and
+          obv_rising and
+          regime in ('WIDE_CHOP', 'BULL')):
+        signal      = "买入"
+        buy_tag     = "低吸买点"
+        buy_price   = round(price, 2)
+        stop_loss   = round(price - 1.5 * atr, 2)
+        take_profit = round(price + 2.5 * atr, 2)
+        reason      = f"RSI={rsi:.0f}进入超卖区，OBV开始企稳，20日低点附近低吸，轻仓试探"
 
-    # =============================
-    # 🔴 卖出（RSI超买）
-    # =============================
-    if rsi > 80:
-        signal = "卖出"
-        buy_tag = f"RSI超买（{rsi:.0f}）"
+    # ── 观望说明 ─────────────────────────────────────────
+    if signal == "观望":
+        if regime == 'BEAR':
+            reason = "大趋势向下，建议空仓等待趋势反转信号"
+        elif regime == 'NARROW_CHOP':
+            reason = "横盘整理阶段，突破方向不明，等待放量信号"
+        elif rsi > rsi_ob - 10:
+            reason = f"RSI={rsi:.0f}偏高，等待回调至合理区间再介入"
+        else:
+            reason = "暂无明确买卖点，等待信号成熟"
 
-    return signal, buy_price, stop_loss, take_profit, buy_tag
+    return signal, buy_price, stop_loss, take_profit, buy_tag, reason
 
-# ===== 统一决策系统（V4.1 核心）=====
-def unified_decision(df, base_score, money_state, money_score):
-
+# ===== 统一决策系统（V10.1 — 市场状态感知版）=====
+def unified_decision(df, base_score, money_state, money_score, regime='WIDE_CHOP'):
     score = base_score
 
-    # =============================
-    # 第一层：资金阶段（最高优先级）
-    # =============================
-    if money_state == "主力拉升":
-        score += 20
-    elif money_state == "试盘":
-        score += 10
-    elif money_state == "吸筹中":
-        score += 5
-    elif money_state == "主力出货":
-        score -= 40
+    # ── 1. 大盘状态加权 ──────────────────────────────────
+    if regime == 'BULL':
+        score += 8    # 牛市环境，适当加分
+    elif regime == 'BEAR':
+        score -= 15   # 熊市环境，大幅降分
+    elif regime == 'NARROW_CHOP':
+        score -= 5    # 横盘消磨，小幅降分
 
-    # =============================
-    # 第二层：资金强度修正
-    # =============================
-    if money_score >= 60:
+    # ── 2. 资金阶段（核心权重）──────────────────────────
+    if money_state == "主力拉升":
+        bonus = 20 if regime == 'BULL' else 15
+        score += bonus
+    elif money_state == "试盘":
+        score += 8
+    elif money_state == "吸筹中":
+        score += 4
+    elif money_state == "主力出货":
+        score -= 35
+
+    # ── 3. 资金强度修正 ───────────────────────────────────
+    if money_score >= 70:
         score += 10
+    elif money_score >= 50:
+        score += 5
     elif money_score <= 20:
         score -= 10
 
     score = max(0, min(100, score))
 
-    # =============================
-    # 阶段标签（用于 UI 和 GPT）
-    # =============================
-    if score >= 75:
+    # ── 4. 阶段标签 ──────────────────────────────────────
+    if score >= 78:
         phase = "主升阶段"
-    elif score >= 60:
+    elif score >= 62:
         phase = "启动阶段"
     elif score >= 45:
         phase = "震荡阶段"
@@ -2119,12 +2260,31 @@ with tab_analyze:
                 short_trend, mid_trend = get_trend(df)
 
                 _prog.progress(45, text="多维度评分中...")
+                # ── 市场状态分类（四象限）──────────────────────
+                regime, adx_val = classify_regime(df)
+                regime_zh = REGIME_ZH.get(regime, regime)
+
+                # ── OBV 资金方向 ──────────────────────────────
+                obv_rising = bool(latest.get('OBV', 0) > latest.get('OBV_MA', 0))
+
+                # ── 大盘共振 ──────────────────────────────────
+                _prog.progress(48, text="获取上证指数...")
+                index_bull, index_label = get_index_resonance()
+
                 base_score, _, _, _, _ = calculate_score_v2(df, price, low_20, high_20, mode_type)
                 mf_score       = multi_factor_score(df)
                 chip_score     = calc_chip_stability(df)
                 combined_score = int(base_score * 0.55 + mf_score * 0.35 + chip_score * 0.1)
                 start_signal, start_level, start_strength = detect_start_signal(df)
-                final_score, phase = unified_decision(df, combined_score, money_state, money_score)
+                final_score, phase = unified_decision(df, combined_score, money_state, money_score, regime)
+
+                # 大盘共振加成
+                if index_bull is True:
+                    index_bonus = 5
+                elif index_bull is False:
+                    index_bonus = -8
+                else:
+                    index_bonus = 0
 
                 _prog.progress(60, text="获取机构评级...")
                 ratings_df, ratings_src = get_institution_ratings(stock_code)
@@ -2168,11 +2328,12 @@ with tab_analyze:
 
                 final_score = max(0, min(100, final_score + ratings_bonus + start_bonus + wd_bonus))
 
-                # ===== 第9步：生成交易信号 =====
-                final_signal, buy_price, stop_loss, take_profit, buy_tag = generate_trade_signal(
-                    df, final_score, money_score
+                # ===== 第9步：生成交易信号（唯一出口）=====
+                final_score = max(0, min(100, final_score + index_bonus))
+                final_signal, buy_price, stop_loss, take_profit, buy_tag, signal_reason = generate_trade_signal(
+                    df, final_score, money_score, regime, obv_rising
                 )
-                trade_logic = explain_trade_logic(final_score, money_score, latest['RSI'])
+                trade_logic = signal_reason  # 直接用指标生成的理由，不再用模板
 
                 # ===== 第10步：移动止损更新 =====
                 if stop_loss is not None:
@@ -2230,15 +2391,30 @@ with tab_analyze:
     5日均量：{latest['VOL_MA5']:.0f}
 
     ==============================
+    【市场环境（最重要，决定策略）】
+    市场状态：{regime_zh}（ADX={adx_val}）
+    大盘共振：{index_label}
+    本状态RSI超买线：{rsi_ob}　超卖线：{rsi_os}
+    OBV资金方向：{'流入✅' if obv_rising else '流出❌'}
+    VWAP量加权均价：{latest.get('VWAP', 'N/A'):.2f if isinstance(latest.get('VWAP'), float) else 'N/A'}
+    ATR波动幅度：{latest.get('ATR', 0):.2f if isinstance(latest.get('ATR'), float) else 'N/A'}
+
+    ==============================
     【系统评分】
     基础评分：{base_score}/100
     多因子评分：{mf_score}/100
     筹码稳定度：{chip_score}/100
     机构评级加成：{ratings_bonus:+d}
-    启动信号加成：{start_bonus:+d}
-    洗盘/出货修正：{wd_bonus:+d}（判断：{wd_decision}，置信度{wd_conf}%，依据：{'、'.join(wd_tags)}）
+    大盘共振加成：{index_bonus:+d}
     融合评分：{final_score}/100
     当前阶段：{phase}
+
+    ==============================
+    【系统交易信号（已由指标计算得出，AI请勿覆盖）】
+    信号：{final_signal}　原因：{signal_reason}
+    买点：{buy_price if buy_price else '无'}
+    止损：{stop_loss if stop_loss else '无'}（ATR动态止损）
+    止盈：{take_profit if take_profit else '无'}
 
     ==============================
     【资金行为（核心）】
@@ -2384,13 +2560,39 @@ with tab_analyze:
                     f'<span style="font-size:18px;font-weight:700">{stock_name}（{stock_code}）</span>'
                     f'&nbsp;&nbsp;<span style="font-size:18px;font-weight:700;color:{chg_color}">{price:.2f} {chg_str}</span>'
                     f'</div>'
-                    f'<div style="font-size:20px;margin-bottom:2px">{stars}</div>'
-                    f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">阶段：{phase}&nbsp;|&nbsp;{hot_flag}</div>',
+                    f'<div style="font-size:20px;margin-bottom:4px">{stars}</div>',
                     unsafe_allow_html=True
                 )
 
+                # ===== 市场状态 + 大盘共振（新增）=====
+                regime_color = {
+                    'BULL': '#22c55e', 'BEAR': '#ef4444',
+                    'WIDE_CHOP': '#f59e0b', 'NARROW_CHOP': '#94a3b8'
+                }.get(regime, '#64748b')
+                rsi_ob, rsi_os = get_regime_rsi_limit(regime)
+                idx_color = '#22c55e' if index_bull else ('#ef4444' if index_bull is False else '#94a3b8')
+
+                regime_html = (
+                    '<div style="display:flex;gap:8px;margin:6px 0 10px;flex-wrap:wrap">' +
+                    f'<span style="background:{regime_color}22;border:1px solid {regime_color};border-radius:6px;padding:3px 10px;font-size:12px;font-weight:700;color:{regime_color}">{regime_zh}</span>' +
+                    f'<span style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:3px 10px;font-size:12px;color:#64748b">ADX={adx_val}　RSI超买线={rsi_ob}</span>' +
+                    f'<span style="background:{idx_color}22;border:1px solid {idx_color};border-radius:6px;padding:3px 10px;font-size:12px;color:{idx_color}">大盘：{index_label}</span>' +
+                    f'<span style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:3px 10px;font-size:12px;color:#64748b">阶段：{phase}　{hot_flag}</span>' +
+                    '</div>'
+                )
+                st.markdown(regime_html, unsafe_allow_html=True)
+
+                # ===== 市场状态说明（小白看懂）=====
+                regime_tips = {
+                    'BULL': '当前处于单边牛市，趋势向上，信号可信度高，可积极参与。RSI容忍度更高，不要轻易卖出',
+                    'BEAR': '当前处于单边熊市，趋势向下，建议以观望为主。即使出现反弹信号也要谨慎，可能是假突破',
+                    'WIDE_CHOP': '当前处于宽幅震荡，有买有卖但方向不明，建议在低位买、高位卖，不追涨不杀跌',
+                    'NARROW_CHOP': '当前处于横盘整理，价格在窄区间内磨合，等待方向突破，耐心观望最佳',
+                }
+                st.caption(f"💡 {regime_tips.get(regime, '')}")
+
                 # ===== 四维评分条 =====
-                st.markdown('<div style="font-size:14px;font-weight:600;margin-bottom:8px">📊 核心评分</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:14px;font-weight:600;margin:10px 0 8px">📊 核心评分</div>', unsafe_allow_html=True)
                 emotion_score = calc_emotion_score(latest['RSI'])
 
                 dims = [
@@ -2411,10 +2613,9 @@ with tab_analyze:
                     st.markdown(bar_html, unsafe_allow_html=True)
 
                 bonus_parts = []
-                if ratings_bonus != 0:
-                    bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
-                if start_bonus != 0:
-                    bonus_parts.append(f"启动信号 {start_bonus:+d}")
+                if ratings_bonus   != 0: bonus_parts.append(f"机构评级 {ratings_bonus:+d}")
+                if start_bonus     != 0: bonus_parts.append(f"启动信号 {start_bonus:+d}")
+                if index_bonus     != 0: bonus_parts.append(f"大盘共振 {index_bonus:+d}")
                 st.markdown(
                     f'<div style="font-size:12px;color:#94a3b8;margin-bottom:12px">'
                     f'综合评分：{final_score}/100'
