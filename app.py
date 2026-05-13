@@ -2856,3 +2856,326 @@ with tab_analyze:
                                 quality_style = st.info
 
                             quality_style(quality_tip)
+
+                            # 出货侦测联动说明
+                            if wd_decision == "出货" and wd_conf >= 50:
+                                st.warning(
+                                    f"⚠️ **出货预警（技术面侦测）**：当前「洗盘vs出货」模块检测到出货信号（置信度{wd_conf}%）。"
+                                    "持仓数据显示机构季末仍持有，但**季报数据滞后1-3个月**——机构可能已在近期开始出货，"
+                                    "与技术面信号吻合时需特别警惕。建议优先相信实时的量价信号，而非过期的持仓数据。"
+                                )
+                            elif ctrl_phase in ["高度控盘", "中度控盘"] and wd_decision == "洗盘":
+                                st.success(
+                                    "✅ **机构持仓 + 洗盘信号双重确认**：持仓结构显示优质机构持有，"
+                                    "同时技术面判断为洗盘（非出货），两者共同指向回调是买点而非出逃点。"
+                                )
+
+                            st.info("**📋 持仓结构解读**\n\n" + "\n\n".join(tips) +
+                                    "\n\n> 💡 **关于机构出货侦测**：季报持仓数据滞后1-3个月，看不到实时出货。"
+                                    "本系统通过「洗盘vs出货」模块用量价行为实时推断，**高位放量不涨/放量下跌**是机构出货的最典型信号，"
+                                    "比持仓数据更及时可靠。")
+                        else:
+                            st.caption("💡 以个人/法人大股东为主，机构持仓特征不明显，参考价值有限")
+                else:
+                    st.warning(holdings_src)
+                    st.caption("💡 持仓数据暂不可用，不影响其他分析结果")
+
+                # ===== 机构评级（压缩统计）=====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">🏦 机构评级</div>', unsafe_allow_html=True)
+                if ratings_df is not None and not ratings_df.empty:
+                    st.caption(f"数据来源：{ratings_src}")
+                    rating_col = next(
+                        (c for c in ratings_df.columns if "评级" in c or "rating" in c.lower()), None
+                    )
+                    if rating_col:
+                        buy_cnt  = int(ratings_df[rating_col].astype(str).str.contains("买入|增持|推荐").sum())
+                        sell_cnt = int(ratings_df[rating_col].astype(str).str.contains("卖出|减持").sum())
+                        hold_cnt = len(ratings_df) - buy_cnt - sell_cnt
+                        total_r  = buy_cnt + hold_cnt + sell_cnt
+                        rating_html = (
+                            '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+                            f'<div style="flex:1;background:#fef2f2;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🟢 买入/增持</div><div style="font-size:16px;font-weight:700;color:#ef4444">{buy_cnt}</div></div>' +
+                            f'<div style="flex:1;background:#fefce8;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🟡 中性/持有</div><div style="font-size:16px;font-weight:700;color:#f59e0b">{hold_cnt}</div></div>' +
+                            f'<div style="flex:1;background:#f0fdf4;border-radius:8px;padding:8px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">🔴 卖出/减持</div><div style="font-size:16px;font-weight:700;color:#22c55e">{sell_cnt}</div></div>' +
+                            '</div>'
+                        )
+                        st.markdown(rating_html, unsafe_allow_html=True)
+
+                        # ── 三大关键信号判断 ──────────────────────────
+                        signals = []
+
+                        # 信号①：卖出评级（稀有负面信号）
+                        if sell_cnt > 0:
+                            signals.append(f"🚨 **信号①** 出现 {sell_cnt} 家卖出/减持评级（A股此类评级不足0.1%，是真实风险警告）")
+
+                        # 信号②：近30天评级数量突增
+                        if "日期" in ratings_df.columns:
+                            try:
+                                cutoff = (datetime.now() - pd.Timedelta(days=30)).strftime("%Y%m%d")
+                                recent_cnt = int((ratings_df["日期"].astype(str) >= cutoff).sum())
+                                older_cnt  = total_r - recent_cnt
+                                if recent_cnt >= 3 and recent_cnt > older_cnt:
+                                    signals.append(f"📈 **信号②** 近30天新增 {recent_cnt} 家评级，明显多于更早期的 {older_cnt} 家，机构正在集中关注")
+                                elif recent_cnt >= 5:
+                                    signals.append(f"📈 **信号②** 近30天有 {recent_cnt} 家机构发布评级，关注热度较高")
+                            except:
+                                pass
+
+                        # 信号③：目标价明显高于现价
+                        if "目标价涨幅%" in ratings_df.columns:
+                            try:
+                                avg_upside = ratings_df["目标价涨幅%"].dropna().astype(float).mean()
+                                if avg_upside >= 20:
+                                    signals.append(f"🎯 **信号③** 机构平均目标价涨幅 {avg_upside:.0f}%，显著高于现价，机构预期强烈")
+                                elif avg_upside >= 10:
+                                    signals.append(f"📊 **信号③** 机构平均目标价涨幅 {avg_upside:.0f}%，有一定上涨空间")
+                            except:
+                                pass
+                        elif "目标价" in ratings_df.columns:
+                            try:
+                                avg_tp = ratings_df["目标价"].dropna().astype(float).mean()
+                                if avg_tp > 0 and price > 0:
+                                    upside = (avg_tp - price) / price * 100
+                                    if upside >= 20:
+                                        signals.append(f"🎯 **信号③** 机构平均目标价 {avg_tp:.2f}（较现价 {price:.2f} 高 {upside:.0f}%），预期强烈")
+                                    elif upside >= 10:
+                                        signals.append(f"📊 **信号③** 机构平均目标价 {avg_tp:.2f}（较现价高 {upside:.0f}%），有上涨空间")
+                                    elif upside < 0:
+                                        signals.append(f"⚠️ **信号③** 机构平均目标价 {avg_tp:.2f} 低于现价 {price:.2f}，空间已透支")
+                            except:
+                                pass
+
+                        # 汇总信号
+                        if signals:
+                            st.info("**🔍 关键信号（真正值得关注的三点）**\n\n" + "\n\n".join(signals))
+                        else:
+                            st.caption("暂未触发三大关键信号（无卖出评级 / 覆盖无突增 / 目标价空间有限）")
+
+                        # 覆盖数量分级解读
+                        if sell_cnt > 0:
+                            rating_tip = f"⚠️ 有 {sell_cnt} 家给出卖出/减持，这是少见的负面信号（A股卖出评级不足0.1%），需认真对待"
+                            rating_style = st.warning
+                        elif total_r >= 10:
+                            if buy_cnt >= total_r * 0.8:
+                                rating_tip = f"✅ {buy_cnt}/{total_r} 家机构覆盖且看多，属于龙头股级别的机构关注度，共识强烈"
+                            else:
+                                rating_tip = f"📊 {total_r} 家机构覆盖，关注度高，但内部有分歧，需结合技术面判断"
+                            rating_style = st.success
+                        elif total_r >= 5:
+                            rating_tip = f"📊 {buy_cnt}/{total_r} 家机构看多，覆盖数量中等偏上（5家以上说明机构有兴趣），可作参考"
+                            rating_style = st.info
+                        elif total_r >= 2:
+                            rating_tip = f"💡 {total_r} 家机构覆盖属于正常水平，买入为主但样本较少，参考价值有限"
+                            rating_style = st.info
+                        else:
+                            rating_tip = f"💡 仅 {total_r} 家机构覆盖，样本过少，不宜单独作为决策依据"
+                            rating_style = st.warning
+
+                        bonus_tip = f"　｜　本次评分加成：{ratings_bonus:+d}分" if ratings_bonus != 0 else "　｜　评分加成：±0"
+                        rating_style(rating_tip + bonus_tip)
+
+                    # 显示评级明细表，按日期降序，最新在前
+                    show_cols = [c for c in ["日期", "机构", "分析师", "评级", "变动", "目标价", "目标价涨幅%"]
+                                 if c in ratings_df.columns]
+                    if not show_cols:
+                        show_cols = list(ratings_df.columns)
+                    display_df = ratings_df[show_cols].copy()
+                    if "日期" in display_df.columns:
+                        display_df = display_df.sort_values("日期", ascending=False)
+                    st.dataframe(display_df.head(15), width='stretch', hide_index=True)
+                else:
+                    st.warning(ratings_src)
+                    st.caption("💡 机构评级需要 Tushare 2000+ 积分独享账号，当前不可用；评分系统将跳过机构加成，不影响其他评分")
+
+                # ===== 动态智能解释 =====
+                dyn_conclusion, dyn_logic, dyn_risk, dyn_action = generate_dynamic_explanation(
+                    short_trend, mid_trend, latest['RSI'], final_signal,
+                    money_state, ctrl_phase, ctrl_score,
+                    wd_decision, wd_conf, chip_score
+                )
+                is_risk_state = final_signal == "卖出" or latest['RSI'] >= 80 or wd_decision == "出货"
+                dyn_component = st.error if is_risk_state else st.info
+                dyn_component(
+                    f"**{dyn_conclusion}**\n\n"
+                    f"**核心逻辑**\n{dyn_logic}\n\n"
+                    f"**风险提示**\n{dyn_risk}\n\n"
+                    f"**操作建议：** {dyn_action}"
+                )
+
+                # ===== 交易信号（高亮）=====
+                signal_color = "#ef4444" if final_signal == "买入" else "#ef4444" if final_signal == "卖出" else "#f59e0b"
+                buy_tag_str = f"（{buy_tag}）" if buy_tag else ""
+                st.markdown(
+                    f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px">🎯 交易信号</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:{signal_color};margin-bottom:8px">{final_signal}{buy_tag_str}</div>',
+                    unsafe_allow_html=True
+                )
+
+                # 信号参数说明
+                rsi_val = round(latest['RSI'], 1)
+                if final_signal == "卖出" and (short_trend == "上升" or mid_trend == "上升"):
+                    st.warning(
+                        f"⚠️ **信号说明（存在矛盾，需结合判断）**\n\n"
+                        f"**触发卖出原因**：RSI={rsi_val}，已进入超买区（>80），短线统计上回调概率较高。\n\n"
+                        f"**与趋势的矛盾**：短线趋势{short_trend}、波段趋势{mid_trend}，趋势本身仍向上。\n\n"
+                        f"**如何理解**：RSI超买 ≠ 立即下跌。强势股可以在超买区继续上涨。系统给出卖出是**短线风控提示**，"
+                        f"意思是「当前追高风险较大，已持仓的注意止盈，未持仓的等回调再介入」，"
+                        f"**不是说股票要跌**。结合主力控盘状态综合判断。"
+                    )
+                elif final_signal == "买入":
+                    st.info(f"💡 综合评分、趋势、资金面共同支持买入，建议在买点附近分批介入，设置止损。")
+                else:
+                    st.info(f"💡 当前信号不够强烈，建议观望等待更明确机会。RSI={rsi_val}。")
+                price_items = []
+                if buy_price:
+                    price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">建议买点</div><div style="font-size:15px;font-weight:700;color:#ef4444">{buy_price}</div></div>')
+                if stop_loss:
+                    price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">止损位</div><div style="font-size:15px;font-weight:700;color:#f59e0b">{stop_loss}</div></div>')
+                if take_profit:
+                    price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">止盈位</div><div style="font-size:15px;font-weight:700;color:#22c55e">{take_profit}</div></div>')
+                if price_items:
+                    st.markdown('<div style="display:flex;gap:10px;margin-top:8px">' + "".join(price_items) + '</div>', unsafe_allow_html=True)
+
+                # ===== 技术面 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">📊 技术面</div>', unsafe_allow_html=True)
+                trend_color1 = "#ef4444" if short_trend == "上升" else "#22c55e"
+                trend_color2 = "#ef4444" if mid_trend == "上升" else "#22c55e"
+                tech_html = (
+                    '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">短线趋势</div><div style="font-size:14px;font-weight:700;color:{trend_color1}">{short_trend}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">波段趋势</div><div style="font-size:14px;font-weight:700;color:{trend_color2}">{mid_trend}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">启动信号</div><div style="font-size:13px;font-weight:700;color:#38bdf8">{start_level}</div></div>' +
+                    '</div>'
+                )
+                st.markdown(tech_html, unsafe_allow_html=True)
+
+                # ===== 资金面 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">💰 资金面</div>', unsafe_allow_html=True)
+                money_color = {"主力拉升":"#ef4444","主力建仓":"#f97316","主力出货":"#22c55e","试盘":"#38bdf8","洗盘":"#a78bfa","震荡":"#94a3b8"}.get(money_state,"#64748b")
+                money_html = (
+                    '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">主力状态</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_state}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">资金强度</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_score}/100</div></div>' +
+                    '</div>'
+                )
+                st.markdown(money_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{money_explain}</div>', unsafe_allow_html=True)
+
+                # ===== 评分说明 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 8px">📌 评分说明</div>', unsafe_allow_html=True)
+                score_html = (
+                    '<div style="display:flex;gap:8px;margin-bottom:6px">' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">技术基础</div><div style="font-size:14px;font-weight:700;color:#38bdf8">{base_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">多因子</div><div style="font-size:14px;font-weight:700;color:#a78bfa">{mf_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">筹码稳定</div><div style="font-size:14px;font-weight:700;color:#34d399">{chip_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">综合评分</div><div style="font-size:14px;font-weight:700;color:#f97316">{final_score}</div></div>' +
+                    '</div>'
+                )
+                # 评分说明动态化
+                if final_score >= 85:
+                    score_tip = "💡 强信号区间，各项指标较为一致，可重点关注"
+                elif final_score >= 70:
+                    score_tip = "💡 中等偏强，可关注但需结合趋势方向确认"
+                elif final_score >= 55:
+                    score_tip = "💡 信号偏弱，建议观望为主，等待更明确的机会"
+                else:
+                    score_tip = "💡 评分偏低，当前不具备介入条件，建议回避"
+                st.markdown(score_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{score_tip}</div>', unsafe_allow_html=True)
+
+                # ===== AI分析报告 =====
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 10px">📋 AI分析报告</div>', unsafe_allow_html=True)
+                render_ai_report(result, hot_flag)
+
+                # ===== 保存记录 =====
+                save_record(stock_code, stock_name, price, short_trend, mid_trend, final_score, final_signal, advice)
+
+        except Exception as e:
+            st.error(f"❌ 出错：{e}")
+
+        finally:
+            st.session_state.analyze_running = False
+
+
+    # ══════════════════════════════════════════════
+# Tab 2：自动选股
+# ══════════════════════════════════════════════
+with tab_select:
+    mode = st.selectbox(
+        "选择选股模式",
+        ["趋势（追涨）", "潜力（低吸）"],
+        key="select_mode"
+    )
+    st.session_state.mode_type = "trend" if "趋势" in mode else "dip"
+    mode_type = st.session_state.mode_type
+
+    if st.button("开始自动选股", key="btn_select"):
+
+        if st.session_state.select_running:
+            st.warning("⚠️ 正在运行，请勿重复点击")
+            st.stop()
+        st.session_state.select_running = True
+
+        try:
+            if st.session_state.get("stock_pool") is None:
+                st.session_state.stock_pool = get_stock_pool()
+
+            stock_list = st.session_state.stock_pool
+
+            if stock_list is None:
+                st.error("❌ 股票池获取失败")
+                st.session_state.select_running = False
+                st.stop()
+
+            st.write("🔍 选股中，请稍等...")
+            df_select = auto_select_stocks(stock_list, mode_type)
+
+            if df_select is not None:
+                st.session_state.select_result = df_select  # 存入 session_state
+                st.success(f"✅ 完成，共筛出 {len(df_select)} 支候选股")
+                st.dataframe(df_select, hide_index=True)
+            else:
+                st.session_state.select_result = None
+                st.info("本次未筛选出符合条件的股票")
+
+        except Exception as e:
+            log_error(f"❌ 自动选股异常：{translate_error(e)}")
+
+        finally:
+            st.session_state.select_running = False
+
+    # 无论是否刚跑完，都显示上次的结果（切 Tab 回来还在）
+    if st.session_state.select_result is not None:
+        df_saved = st.session_state.select_result
+        st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin:8px 0">上次结果：共 {len(df_saved)} 支候选股（按评分排序）</div>', unsafe_allow_html=True)
+        st.dataframe(df_saved, hide_index=True)
+        if st.button("清除结果", key="btn_clear_select"):
+            st.session_state.select_result = None
+            st.rerun()
+# ══════════════════════════════════════════════
+with tab_review:
+    st.caption("每次点击「开始分析」后会自动保存记录，复盘数据在当次部署会话内有效")
+    if st.button("查看预测结果", key="btn_review"):
+        df_result = check_performance()
+
+        if df_result is None:
+            st.info("📭 本次会话还没有分析记录。请先在「单股分析」里分析几只股票，记录会自动保存。")
+        elif df_result.empty:
+            st.info("📭 记录文件存在但内容为空。")
+        else:
+            st.dataframe(df_result, width='stretch', hide_index=True)
+            st.markdown(
+                '<div style="font-size:18px;font-weight:700;margin:12px 0 6px">📊 统计</div>',
+                unsafe_allow_html=True
+            )
+            total = len(df_result)
+            profit_cnt = len(df_result[df_result["结果"] == "✅ 盈利"])
+            loss_cnt   = len(df_result[df_result["结果"] == "❌ 止损失败"])
+            watch_cnt  = len(df_result[df_result["结果"] == "⚠️ 观察中"])
+            review_html = (
+                '<div style="display:flex;gap:8px;margin:10px 0">' +
+                f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">共记录</div><div style="font-size:16px;font-weight:700;color:#1e293b">{total}</div></div>' +
+                f'<div style="flex:1;background:#f0fdf4;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">✅ 盈利</div><div style="font-size:16px;font-weight:700;color:#22c55e">{profit_cnt}</div></div>' +
+                f'<div style="flex:1;background:#fefce8;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">⚠️ 观察中</div><div style="font-size:16px;font-weight:700;color:#f59e0b">{watch_cnt}</div></div>' +
+                f'<div style="flex:1;background:#fef2f2;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">❌ 止损</div><div style="font-size:16px;font-weight:700;color:#ef4444">{loss_cnt}</div></div>' +
+                '</div>'
+            )
+            st.markdown(review_html, unsafe_allow_html=True)
