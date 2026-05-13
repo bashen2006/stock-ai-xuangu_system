@@ -2856,5 +2856,3 @@ with tab_analyze:
                                 quality_style = st.info
 
                             quality_style(quality_tip)
-
-          
