@@ -139,7 +139,7 @@ st.set_page_config(layout="wide")
 st.markdown(
     '<div style="text-align:center;padding:12px 0 4px">'
     '<span style="font-size:22px;font-weight:700">📊 AI股票分析系统（专业版）</span>'
-    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V10.1</span>'
+    '&nbsp;&nbsp;<span style="font-size:11px;color:#94a3b8">V10.2</span>'
     '</div>',
     unsafe_allow_html=True
 )
@@ -148,6 +148,7 @@ with st.expander("📋 更新日志", expanded=False):
     st.markdown("""
 <div style="font-size:11px;color:#64748b;line-height:1.8">
 
+**V10.2** 彻底统一：①detect_money_flow改累分制修复资金=0 bug ②删除动态解释+矛盾警告，统一为单一结论卡片 ③AI prompt改为"只做总结不做判断" ④render_ai_report改4段简洁格式 ⑤全局术语加括号说明<br>
 **V10.1** 系统性重构：四象限市场状态（BULL/BEAR/WIDE_CHOP/NARROW_CHOP）+ADX趋势强度；OBV资金方向；VWAP量加权均价；ATR动态止损；大盘（上证指数）共振判断；RSI阈值随市场状态自适应；统一信号出口消除矛盾<br>
 **V10.0** 复盘彻底修复：读取CSV强制dtype=str，nan/float/旧格式三种情况全部处理，代码补零逻辑统一；主力控盘加连续上涨天数维度（对齐同花顺判断逻辑）<br>
 **V9.9** GPT temperature=0（结果不再随机）；复盘00开头股票名称查缓存修复；交易信号加参数说明（RSI超买≠立即下跌，矛盾时显示解释）；洗盘出货上涨日返回中性<br>
@@ -965,58 +966,86 @@ def update_trailing_stop(stock_code, new_stop_loss):
 
 # ===== 资金行为识别模块（V3.5）=====
 def detect_money_flow(df):
+    """
+    累分制资金判断，不再使用 elif 导致单日误判。
+    每种行为独立计分，最终取主导阶段。
+    """
+    latest    = df.iloc[-1]
+    price     = latest['收盘']
+    open_price= latest['开盘']
+    vol       = latest['成交量']
+    rsi       = latest.get('RSI', 50) or 50
 
-    latest = df.iloc[-1]
-    price = latest['收盘']
-    open_price = latest['开盘']
-    vol = latest['成交量']
-
-    vol_ma5 = df['成交量'].rolling(5).mean().iloc[-1]
+    vol_ma5  = df['成交量'].rolling(5).mean().iloc[-1]
     vol_ma10 = df['成交量'].rolling(10).mean().iloc[-1]
+    if pd.isna(vol_ma5)  or vol_ma5  == 0: vol_ma5  = vol
+    if pd.isna(vol_ma10) or vol_ma10 == 0: vol_ma10 = vol
 
-    low_20 = df['最低'].tail(20).min()
+    low_20  = df['最低'].tail(20).min()
     high_20 = df['最高'].tail(20).max()
+    is_up   = price >= open_price
 
-    rsi = latest['RSI']
+    # 近5日涨幅
+    price_5ago = df['收盘'].iloc[-6] if len(df) >= 6 else price
+    gain_5d = (price - price_5ago) / price_5ago if price_5ago > 0 else 0
 
-    score = 0
-    state = "未知"
+    # 均线多头
+    ma5  = latest.get('MA5',  price)
+    ma20 = latest.get('MA20', price)
 
-    # =============================
-    # 1️⃣ 吸筹（低位 + 缩量）
-    # =============================
-    if price <= low_20 * 1.05 and vol < vol_ma5:
-        score += 30
-        state = "吸筹中"
+    scores = {
+        '吸筹中': 0, '试盘': 0, '主力拉升': 0, '主力出货': 0, '洗盘': 0
+    }
 
-    # =============================
-    # 2️⃣ 试盘（放量 + 小涨）
-    # =============================
-    elif vol > vol_ma5 * 1.2 and price > open_price:
-        score += 40
-        state = "试盘"
+    # ── 吸筹特征 ──────────────────────────────────────
+    if price <= low_20 * 1.08:
+        scores['吸筹中'] += 30
+    if vol < vol_ma5 * 0.85 and price > open_price:
+        scores['吸筹中'] += 20
 
-    # =============================
-    # 3️⃣ 拉升（放量上涨 + 突破）
-    # =============================
-    elif price > high_20 * 0.98 and vol > vol_ma10:
-        score += 60
-        state = "主力拉升"
+    # ── 拉升特征（最强权重）──────────────────────────
+    if price >= high_20 * 0.97:
+        scores['主力拉升'] += 35
+    if vol > vol_ma10 * 1.15 and is_up:
+        scores['主力拉升'] += 25
+    if gain_5d >= 0.05:
+        scores['主力拉升'] += 20
+    if ma5 > ma20 and is_up:
+        scores['主力拉升'] += 15
+    # RSI高位在拉升时不惩罚——强势股RSI可以很高
+    if rsi > 85 and not is_up:
+        scores['主力拉升'] -= 10
 
-    # =============================
-    # 4️⃣ 出货（高位 + 放量滞涨）
-    # =============================
-    elif price >= high_20 * 0.95 and vol > vol_ma5 and price <= open_price:
-        score -= 40
-        state = "主力出货"
+    # ── 试盘特征 ──────────────────────────────────────
+    if vol > vol_ma5 * 1.2 and is_up and price < high_20 * 0.95:
+        scores['试盘'] += 40
+    if 0.01 < gain_5d < 0.04:
+        scores['试盘'] += 15
 
-    # =============================
-    # 风险修正
-    # =============================
-    if rsi > 75:
-        score -= 10
+    # ── 出货特征（高位放量且收阴，跌幅>1.5%才算）─────
+    drop_pct = (open_price - price) / open_price if open_price > 0 else 0
+    if price >= high_20 * 0.93 and vol > vol_ma5 * 1.4 and drop_pct > 0.015:
+        scores['主力出货'] += 60
+    if gain_5d < -0.05 and vol > vol_ma5:
+        scores['主力出货'] += 20
 
-    score = max(0, min(100, score))
+    # ── 洗盘特征 ──────────────────────────────────────
+    if vol < vol_ma5 * 0.9 and not is_up and price > ma20:
+        scores['洗盘'] += 35
+    if 0 > gain_5d > -0.04 and price > ma20 * 0.97:
+        scores['洗盘'] += 20
+
+    # 取得分最高的状态
+    state = max(scores, key=scores.get)
+    raw_score = scores[state]
+
+    # 若最高分 < 15，判断为震荡
+    if raw_score < 15:
+        state = '震荡'
+        raw_score = 20
+
+    # 将原始得分映射到 0-100
+    score = max(0, min(100, raw_score))
 
     return state, score
 
@@ -1043,12 +1072,12 @@ def generate_dynamic_explanation(
         conclusion = "⚠️ 当前处于高风险区（超买/卖出信号触发）"
         risk.append(f"RSI={rsi:.0f}，已进入超买区间，回调压力大")
         if wd_decision == "出货":
-            risk.append(f"检测到主力出货迹象（置信度 {wd_conf}%）")
+            risk.append(f"检测到主力出货迹象（可信程度 {wd_conf}%）")
         action = "建议减仓或观望，避免追高被套"
 
     elif wd_decision == "出货" and wd_conf >= 50:
         conclusion = "⚠️ 检测到出货信号，谨慎操作"
-        risk.append(f"主力出货置信度 {wd_conf}%，筹码松动")
+        risk.append(f"主力出货可信程度 {wd_conf}%，筹码松动")
         action = "建议观望或逐步减仓"
 
     # ── 2. 主力行为 ────────────────────────────────────────
@@ -1058,9 +1087,9 @@ def generate_dynamic_explanation(
         logic.append(f"主力有一定介入（{ctrl_phase}）")
 
     if wd_decision == "洗盘":
-        logic.append(f"当前为洗盘结构（置信度 {wd_conf}%），回调非出货")
+        logic.append(f"当前为洗盘结构（可信程度 {wd_conf}%），回调非出货")
     elif wd_decision == "出货" and not is_risk:
-        logic.append(f"存在出货迹象（置信度 {wd_conf}%），需警惕")
+        logic.append(f"存在出货迹象（可信程度 {wd_conf}%），需警惕")
 
     # ── 3. 趋势结构（核心逻辑，必须精准） ─────────────────
     if short_trend == "上升" and mid_trend == "上升":
@@ -1734,53 +1763,50 @@ def explain_trade_logic(score, money_score, rsi):
 
 # ===== AI 分析报告渲染（问答卡片形式）=====
 def render_ai_report(result, hot_flag):
+    """
+    简洁4段展示：情况说明 / 操作建议 / 风险提示 / 一句话总结
+    匹配新 prompt 的4段格式输出。
+    """
     import re
 
-    # 章节配置：编号 → (标题, 组件类型)
-    SECTION_CFG = {
-        '1':  (f'🎯 当前阶段判断',      'error'),
-        '2':  (f'📈 趋势分析',           'info'),
-        '3':  (f'⚡ 是否接近突破',       'warning'),
-        '4':  (f'📊 上涨概率',           'info'),
-        '5':  (f'⚠️ 风险评估',           'warning'),
-        '6':  (f'💰 主力资金解读',       'info'),
-        '7':  (f'🤖 系统交易决策',       'info'),
-        '8':  (f'✅ 具体操作策略',       'success'),
-        '9':  (f'{hot_flag} 行业与热点', 'warning'),
-        '10': (f'🚨 是否容易被套',       'error'),
-        '11': (f'💡 一句话总结',         'success'),
+    # 解析新格式：【现在是什么情况】【系统给出的操作建议是什么】【最大的风险是什么】【一句话总结】
+    sections = re.split(r'【([^】]+)】', result)
+
+    if len(sections) < 3:
+        # 降级：直接显示原文
+        st.info(result.strip())
+        return
+
+    # sections[0] 是前言（通常为空），之后是 标题/内容 交替
+    i = 1
+    configs = {
+        '现在是什么情况': ('📊 当前情况',   'info'),
+        '系统给出的操作建议是什么': (f'🎯 操作建议', 'success'),
+        '最大的风险是什么': ('⚠️ 风险提示',  'warning'),
+        '一句话总结': ('💡 一句话总结',  'success'),
     }
 
-    parts = re.split(r'(【(\d+)[\.、．\s][^】]*】)', result)
+    while i + 1 < len(sections):
+        title_raw = sections[i].strip()
+        body      = sections[i + 1].strip()
+        i += 2
 
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-        if re.match(r'^【\d+', part) and i + 2 <= len(parts):
-            num     = parts[i + 1]
-            content = parts[i + 2].strip() if i + 2 < len(parts) else ''
-            i += 3
-
-            title, style = SECTION_CFG.get(num, ('📌 分析', 'info'))
-
-            # 第11条特殊：居中大字总结
-            if num == '11':
-                st.success(f"**{title}**\n\n---\n\n> 💬 {content}")
-            else:
-                # 问答形式：标题行 + 分隔线 + 内容
-                body = f"**{title}**\n\n---\n\n{content}"
-                if style == 'error':
-                    st.error(body)
-                elif style == 'warning':
-                    st.warning(body)
-                elif style == 'success':
-                    st.success(body)
-                else:
-                    st.info(body)
+        # 找最接近的配置
+        matched_key = next((k for k in configs if k in title_raw), None)
+        if matched_key:
+            display_title, style = configs[matched_key]
         else:
-            if part.strip():
-                st.caption(part.strip())
-            i += 1
+            display_title = f"📌 {title_raw}"
+            style = 'info'
+
+        if matched_key == '一句话总结':
+            st.success(f"**{display_title}**\n\n---\n\n> 💬 {body}")
+        elif style == 'warning':
+            st.warning(f"**{display_title}**\n\n---\n\n{body}")
+        elif style == 'success':
+            st.success(f"**{display_title}**\n\n---\n\n{body}")
+        else:
+            st.info(f"**{display_title}**\n\n---\n\n{body}")
 
 
 # ===== 机构评级（Tushare，积分不足时提示）=====
@@ -2355,153 +2381,59 @@ with tab_analyze:
                 vwap_str = f"{_vwap:.2f}" if isinstance(_vwap, float) and not pd.isna(_vwap) else "N/A"
                 atr_str  = f"{_atr:.2f}"  if isinstance(_atr,  float) and not pd.isna(_atr)  else "N/A"
 
+                # ── 热点判断描述 ────────────────────────────
+                heat_str = "今日涨停数据暂未获取"
+                if market_heat:
+                    heat_str = f"日期：{market_heat['date']}，涨停{market_heat['total_up']}家"
+                    if market_heat.get('hot_sectors'):
+                        heat_str += f"，热点板块：{'、'.join(market_heat['hot_sectors'][:3])}"
+
                 prompt = f"""
-    你是A股专业交易分析师（短线 + 资金行为 + 实战决策风格），请基于以下数据进行"分析 + 交易决策"。
+你的唯一任务：用通俗易懂的中文，把下面系统已经计算好的指标结论，翻译成普通投资者能看懂的总结。
 
-    ==============================
-    【股票信息】
-    名称：{stock_name}
-    代码：{stock_code}
-    当前价格：{price}
+【绝对禁止】：
+- 禁止推翻或质疑下面任何一个数字结论
+- 禁止自己做新的买卖判断（判断已经由系统做好了）
+- 禁止使用专业术语而不解释
+- 禁止说"可能""或许""建议关注"这类模糊表达
+- 禁止前后矛盾
 
-    ==============================
-    【趋势结构】
-    短线趋势：{short_trend}
-    波段趋势：{mid_trend}
+===== 系统已计算完毕的结论（你必须以此为准）=====
 
-    ==============================
-    【关键位置】
-    近支撑：{low_20}
-    强支撑：{low_60}
+股票：{stock_name}（{stock_code}）　当前价：{price}
 
-    近压力：{high_20}
-    强压力：{high_60}
+市场环境：{regime_zh}　大盘：{index_label}
+资金方向：{'主力资金净流入' if obv_rising else '主力资金净流出'}
 
-    ==============================
-    【技术指标】
-    RSI：{latest['RSI']:.2f}
-    MACD：{latest['MACD']:.2f}
+综合评分：{final_score}/100（满分100，60分以上可关注，80分以上强信号）
+当前阶段：{phase}
+资金状态：{money_state}（强度{money_score}/100）
+主力控盘：{ctrl_phase}（强度{ctrl_score}/100）
+洗盘/出货：{wd_decision}（可信度{wd_conf}%）
 
-    KDJ：
-    K={latest['K']:.2f}
-    D={latest['D']:.2f}
-    J={latest['J']:.2f}
+系统操作信号：【{final_signal}】　原因：{signal_reason}
+建议买点：{buy_price if buy_price else "当前无买点"}
+止损价位：{stop_loss if stop_loss else "当前无止损"}（基于近期波动幅度{atr_str}自动计算）
+止盈目标：{take_profit if take_profit else "当前无止盈目标"}
 
-    布林带：
-    上轨：{latest['UPPER']:.2f}
-    中轨：{latest['MB']:.2f}
-    下轨：{latest['LOWER']:.2f}
+近期支撑位：{low_20}　近期压力位：{high_20}
+行业：{stock_industry or "未知"}　热点情况：{heat_str}
 
-    ==============================
-    【成交量】
-    当前成交量：{latest['成交量']}
-    5日均量：{latest['VOL_MA5']:.0f}
+===== 请按以下格式输出总结 =====
 
-    ==============================
-    【市场环境（最重要，决定策略）】
-    市场状态：{regime_zh}（ADX={adx_val}）
-    大盘共振：{index_label}
-    本状态RSI超买线：{rsi_ob}　超卖线：{rsi_os}
-    OBV资金方向：{'流入✅' if obv_rising else '流出❌'}
-    VWAP量加权均价：{vwap_str}
-    ATR波动幅度：{atr_str}
+【现在是什么情况】
+用1-2句话说明这只股票当前处于什么状态，资金在做什么。
 
-    ==============================
-    【系统评分】
-    基础评分：{base_score}/100
-    多因子评分：{mf_score}/100
-    筹码稳定度：{chip_score}/100
-    机构评级加成：{ratings_bonus:+d}
-    大盘共振加成：{index_bonus:+d}
-    融合评分：{final_score}/100
-    当前阶段：{phase}
+【系统给出的操作建议是什么】
+直接说系统建议{final_signal}，并用大白话解释原因。
+如果有买点/止损/止盈，说明这些价格是怎么算出来的。
 
-    ==============================
-    【系统交易信号（已由指标计算得出，AI请勿覆盖）】
-    信号：{final_signal}　原因：{signal_reason}
-    买点：{buy_price if buy_price else '无'}
-    止损：{stop_loss if stop_loss else '无'}（ATR动态止损）
-    止盈：{take_profit if take_profit else '无'}
+【最大的风险是什么】
+明确说出1-2个主要风险点，不要模糊。
 
-    ==============================
-    【资金行为（核心）】
-    主力状态：{money_state}
-    资金强度：{money_score}/100
-
-    ==============================
-    【主力控盘（参考）】
-    控盘阶段：{ctrl_phase}
-    控盘强度：{ctrl_score}/100
-    行为特征：{'、'.join(ctrl_tags) if ctrl_tags else '无明显特征'}
-
-    ======================================
-
-    请严格按照以下结构输出（必须逐条回答）：
-
-    【1. 当前阶段判断（核心）】
-    （必须从以下中选择一个：下跌 / 反弹 / 试盘 / 启动 / 主升 / 出货）
-    并说明理由
-
-    【2. 趋势分析】
-    短线 + 波段是否共振？是否出现拐点？
-
-    【3. 是否接近突破（非常关键）】
-    （是 / 否 + 理由）
-    是否接近压力位或即将进入主升段
-
-    【4. 上涨概率（必须给百分比）】
-
-    【5. 风险评估】
-    （低 / 中 / 高）
-    说明风险来源（高位 / 超买 / 压力位 / 资金不足等）
-
-    【6. 主力资金解读（必须结合）】
-    说明当前是：吸筹 / 试盘 / 拉升 / 出货
-    并判断资金是增强还是减弱
-
-    【7. 系统交易决策说明】
-    当前系统信号：{final_signal}（{buy_tag if buy_tag else "无买点标签"}）
-    当前阶段：{phase}
-    请解释这个信号是否合理，并给出补充说明。不得推翻系统结论。
-
-    【8. 具体操作策略（必须给价格）】
-    - 建议买点：
-    - 止损位置：
-    - 止盈目标：
-
-    【9. 行业与热点分析】
-    该股所属行业：{stock_industry or "未知"}
-
-    ===== 今日市场热点（真实涨停板数据）=====
-    {f"日期：{market_heat['date']}　涨停家数：{market_heat['total_up']}" if market_heat else "今日涨停数据暂未获取"}
-    {f"热点板块：{'、'.join(market_heat['hot_sectors'])}" if market_heat and market_heat['hot_sectors'] else ""}
-    {f"连板题材股：{'、'.join(market_heat['continuous'])}" if market_heat and market_heat['continuous'] else ""}
-
-    ===== 国际市场参考 =====
-    请结合你的知识，分析以下方面对当前A股的可能影响：
-    1. 近期美股（标普500/纳斯达克）走势与A股的联动关系（美股异动通常有0-1个交易日的A股滞后反应）
-    2. 近期重要国际事件（贸易政策、地缘政治、美联储动向）对相关行业板块的影响
-    3. 该股所在行业是否受国际因素直接影响（如半导体受美国出口管制、新能源受补贴政策等）
-
-    请综合以上数据，判断：
-    - 该股所在行业是否属于当前市场热点？
-    - 是否受到国际市场利好/利空影响？
-
-    【10. 是否容易被套】
-    说明在当前价格买入的风险
-
-    【11. 一句话总结（必须通俗易懂）】
-    用一句话说明现在该不该操作
-
-    ======================================
-
-    【严格要求】
-    ❗ 必须给明确结论（不能模糊）
-    ❗ 必须结合"资金行为"分析
-    ❗ 必须给"具体价格"
-    ❗ 禁止只说"建议关注""可能上涨"
-    ❗ 必须判断"是否属于启动临界点（即将突破）"
-    """
+【一句话总结】
+给出一句普通人能立刻理解的操作判断，直接告诉用户现在应该怎么做。
+"""
 
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
@@ -2582,7 +2514,7 @@ with tab_analyze:
                 regime_html = (
                     '<div style="display:flex;gap:8px;margin:6px 0 10px;flex-wrap:wrap">' +
                     f'<span style="background:{regime_color}22;border:1px solid {regime_color};border-radius:6px;padding:3px 10px;font-size:12px;font-weight:700;color:{regime_color}">{regime_zh}</span>' +
-                    f'<span style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:3px 10px;font-size:12px;color:#64748b">ADX={adx_val}　RSI超买线={rsi_ob}</span>' +
+                    f'<span style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:3px 10px;font-size:12px;color:#64748b">ADX（趋势强度）={adx_val}　RSI超买警戒线={rsi_ob}</span>' +
                     f'<span style="background:{idx_color}22;border:1px solid {idx_color};border-radius:6px;padding:3px 10px;font-size:12px;color:{idx_color}">大盘：{index_label}</span>' +
                     f'<span style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:3px 10px;font-size:12px;color:#64748b">阶段：{phase}　{hot_flag}</span>' +
                     '</div>'
@@ -2773,7 +2705,7 @@ with tab_analyze:
                 wd_html = (
                     '<div style="display:flex;gap:10px;margin-bottom:6px">' +
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">判断结果</div><div style="font-size:15px;font-weight:700;color:{wd_color}">{wd_decision}</div></div>' +
-                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">置信度</div><div style="font-size:15px;font-weight:700;color:{wd_color}">{wd_conf}%</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">可信程度</div><div style="font-size:15px;font-weight:700;color:{wd_color}">{wd_conf}%</div></div>' +
                     '</div>'
                 )
                 st.markdown(wd_html, unsafe_allow_html=True)
@@ -2860,7 +2792,7 @@ with tab_analyze:
                             # 出货侦测联动说明
                             if wd_decision == "出货" and wd_conf >= 50:
                                 st.warning(
-                                    f"⚠️ **出货预警（技术面侦测）**：当前「洗盘vs出货」模块检测到出货信号（置信度{wd_conf}%）。"
+                                    f"⚠️ **出货预警（技术面侦测）**：当前「洗盘vs出货」模块检测到出货信号（可信程度{wd_conf}%）。"
                                     "持仓数据显示机构季末仍持有，但**季报数据滞后1-3个月**——机构可能已在近期开始出货，"
                                     "与技术面信号吻合时需特别警惕。建议优先相信实时的量价信号，而非过期的持仓数据。"
                                 )
@@ -2988,44 +2920,21 @@ with tab_analyze:
                     st.caption("💡 机构评级需要 Tushare 2000+ 积分独享账号，当前不可用；评分系统将跳过机构加成，不影响其他评分")
 
                 # ===== 动态智能解释 =====
-                dyn_conclusion, dyn_logic, dyn_risk, dyn_action = generate_dynamic_explanation(
-                    short_trend, mid_trend, latest['RSI'], final_signal,
-                    money_state, ctrl_phase, ctrl_score,
-                    wd_decision, wd_conf, chip_score
-                )
-                is_risk_state = final_signal == "卖出" or latest['RSI'] >= 80 or wd_decision == "出货"
-                dyn_component = st.error if is_risk_state else st.info
-                dyn_component(
-                    f"**{dyn_conclusion}**\n\n"
-                    f"**核心逻辑**\n{dyn_logic}\n\n"
-                    f"**风险提示**\n{dyn_risk}\n\n"
-                    f"**操作建议：** {dyn_action}"
-                )
+                # ===== 系统综合结论（唯一出口，替代所有矛盾描述）=====
+                rsi_val   = round(latest['RSI'], 1)
+                signal_color = {"买入": "#22c55e", "卖出": "#ef4444", "观望": "#f59e0b"}.get(final_signal, "#f59e0b")
+                signal_bg    = {"买入": "#f0fdf4", "卖出": "#fef2f2", "观望": "#fffbeb"}.get(final_signal, "#fffbeb")
+                buy_tag_str  = f"（{buy_tag}）" if buy_tag else ""
 
-                # ===== 交易信号（高亮）=====
-                signal_color = "#ef4444" if final_signal == "买入" else "#ef4444" if final_signal == "卖出" else "#f59e0b"
-                buy_tag_str = f"（{buy_tag}）" if buy_tag else ""
+                # 顶部大信号卡片
                 st.markdown(
-                    f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px">🎯 交易信号</div>'
-                    f'<div style="font-size:20px;font-weight:700;color:{signal_color};margin-bottom:8px">{final_signal}{buy_tag_str}</div>',
+                    f'<div style="background:{signal_bg};border:2px solid {signal_color};border-radius:10px;padding:14px 16px;margin:10px 0">' +
+                    f'<div style="font-size:12px;color:#64748b;margin-bottom:4px">📊 系统综合评分 {final_score}/100 · 阶段：{phase}</div>' +
+                    f'<div style="font-size:22px;font-weight:700;color:{signal_color}">{final_signal}{buy_tag_str}</div>' +
+                    f'<div style="font-size:13px;color:#475569;margin-top:6px">{signal_reason}</div>' +
+                    '</div>',
                     unsafe_allow_html=True
                 )
-
-                # 信号参数说明
-                rsi_val = round(latest['RSI'], 1)
-                if final_signal == "卖出" and (short_trend == "上升" or mid_trend == "上升"):
-                    st.warning(
-                        f"⚠️ **信号说明（存在矛盾，需结合判断）**\n\n"
-                        f"**触发卖出原因**：RSI={rsi_val}，已进入超买区（>80），短线统计上回调概率较高。\n\n"
-                        f"**与趋势的矛盾**：短线趋势{short_trend}、波段趋势{mid_trend}，趋势本身仍向上。\n\n"
-                        f"**如何理解**：RSI超买 ≠ 立即下跌。强势股可以在超买区继续上涨。系统给出卖出是**短线风控提示**，"
-                        f"意思是「当前追高风险较大，已持仓的注意止盈，未持仓的等回调再介入」，"
-                        f"**不是说股票要跌**。结合主力控盘状态综合判断。"
-                    )
-                elif final_signal == "买入":
-                    st.info(f"💡 综合评分、趋势、资金面共同支持买入，建议在买点附近分批介入，设置止损。")
-                else:
-                    st.info(f"💡 当前信号不够强烈，建议观望等待更明确机会。RSI={rsi_val}。")
                 price_items = []
                 if buy_price:
                     price_items.append(f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:4px">建议买点</div><div style="font-size:15px;font-weight:700;color:#ef4444">{buy_price}</div></div>')
@@ -3042,9 +2951,9 @@ with tab_analyze:
                 trend_color2 = "#ef4444" if mid_trend == "上升" else "#22c55e"
                 tech_html = (
                     '<div style="display:flex;gap:8px;margin-bottom:6px">' +
-                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">短线趋势</div><div style="font-size:14px;font-weight:700;color:{trend_color1}">{short_trend}</div></div>' +
-                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">波段趋势</div><div style="font-size:14px;font-weight:700;color:{trend_color2}">{mid_trend}</div></div>' +
-                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">启动信号</div><div style="font-size:13px;font-weight:700;color:#38bdf8">{start_level}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">短线趋势（5-10日）</div><div style="font-size:14px;font-weight:700;color:{trend_color1}">{short_trend}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">波段趋势（20-60日）</div><div style="font-size:14px;font-weight:700;color:{trend_color2}">{mid_trend}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">启动信号（快涨前兆）</div><div style="font-size:13px;font-weight:700;color:#38bdf8">{start_level}</div></div>' +
                     '</div>'
                 )
                 st.markdown(tech_html, unsafe_allow_html=True)
@@ -3055,7 +2964,7 @@ with tab_analyze:
                 money_html = (
                     '<div style="display:flex;gap:8px;margin-bottom:6px">' +
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">主力状态</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_state}</div></div>' +
-                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">资金强度</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_score}/100</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">主力资金强度</div><div style="font-size:14px;font-weight:700;color:{money_color}">{money_score}/100</div></div>' +
                     '</div>'
                 )
                 st.markdown(money_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{money_explain}</div>', unsafe_allow_html=True)
@@ -3066,23 +2975,23 @@ with tab_analyze:
                     '<div style="display:flex;gap:8px;margin-bottom:6px">' +
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">技术基础</div><div style="font-size:14px;font-weight:700;color:#38bdf8">{base_score}</div></div>' +
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">多因子</div><div style="font-size:14px;font-weight:700;color:#a78bfa">{mf_score}</div></div>' +
-                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">筹码稳定</div><div style="font-size:14px;font-weight:700;color:#34d399">{chip_score}</div></div>' +
+                    f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">筹码稳定度（持股集中）</div><div style="font-size:14px;font-weight:700;color:#34d399">{chip_score}</div></div>' +
                     f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center"><div style="font-size:11px;color:#94a3b8;margin-bottom:3px">综合评分</div><div style="font-size:14px;font-weight:700;color:#f97316">{final_score}</div></div>' +
                     '</div>'
                 )
                 # 评分说明动态化
                 if final_score >= 85:
-                    score_tip = "💡 强信号区间，各项指标较为一致，可重点关注"
+                    score_tip = "💡 综合评分进入强信号区（80分以上），各项指标一致看好，可重点关注"
                 elif final_score >= 70:
-                    score_tip = "💡 中等偏强，可关注但需结合趋势方向确认"
+                    score_tip = "💡 综合评分中等偏强（70-80分），有机会但需确认趋势方向再介入"
                 elif final_score >= 55:
-                    score_tip = "💡 信号偏弱，建议观望为主，等待更明确的机会"
+                    score_tip = "💡 综合评分偏弱（55-70分），建议观望为主，等待更明确的买入机会"
                 else:
-                    score_tip = "💡 评分偏低，当前不具备介入条件，建议回避"
+                    score_tip = "💡 综合评分偏低（55分以下），当前不具备买入条件，建议回避等待"
                 st.markdown(score_html + f'<div style="font-size:12px;color:#64748b;margin-bottom:8px">{score_tip}</div>', unsafe_allow_html=True)
 
                 # ===== AI分析报告 =====
-                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 10px">📋 AI分析报告</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:16px;font-weight:700;margin:14px 0 10px">🤖 AI综合解读（基于系统指标）</div>', unsafe_allow_html=True)
                 render_ai_report(result, hot_flag)
 
                 # ===== 保存记录 =====
